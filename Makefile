@@ -14,7 +14,7 @@ init_env:
 	source .env/bin/activate
 
 lint:
-	pep8 --exclude=.env .
+	pep8 --max-line-length 120 --exclude=.env .
 
 format:
-	autopep8 --in-place --aggressive -r .
+	autopep8 --max-line-length 120 --in-place --aggressive -r .
