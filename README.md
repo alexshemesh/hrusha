@@ -30,3 +30,7 @@ Tests are reqular pytest set. Read here [more](https://docs.pytest.org/en/7.1.x/
 pytest .
 ```
 
+# Execute
+```
+python main.py
+```
