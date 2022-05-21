@@ -3,6 +3,7 @@ from typing import List
 from enum import Enum
 from .coins import Coin, Pair
 
+
 class StrategyOrderState(Enum):
     NEW = 'NEW'
     CANCELED = 'CANCELED'
@@ -18,11 +19,10 @@ class StrategyOrderType(Enum):
     LIMIT_BUY = 1
     LIMIT_SELL = 2
 
-from typing import List
 
 class StrategyOrder():
-    def __init__(self, pair: Pair=Pair.UNDEFINED, price: float = 0.0,
-                 amount_to_use: float = 0.0, type: StrategyOrderType = StrategyOrderType.LIMIT_BUY ) -> None:
+    def __init__(self, pair: Pair = Pair.UNDEFINED, price: float = 0.0,
+                 amount_to_use: float = 0.0, type: StrategyOrderType = StrategyOrderType.LIMIT_BUY) -> None:
         """Default contructor for orde
 
         Args:
@@ -37,7 +37,7 @@ class StrategyOrder():
         self.type = type
         self.final_price = 0.0
         if pair != Pair.UNDEFINED:
-            self.from_coin = get_from_coin(pair, type )
+            self.from_coin = get_from_coin(pair, type)
             self.to_coin = get_to_coin(pair, type)
         self.fee = 0.0
         self.fee_coin = Coin.UNDEFINED
@@ -80,27 +80,30 @@ def load_orders_from_file(filename: str) -> List[StrategyOrder]:
                 order = StrategyOrder()
                 k = 0
                 for key in keys:
-                    if k < len(row):   
+                    if k < len(row):
                         splited_values = row[k].split('.')
                         if splited_values[0] == 'Pair':
                             order.__dict__['pair'] = Pair[splited_values[1]]
                         elif splited_values[0] == 'StrategyOrderType':
-                            order.__dict__['type'] = StrategyOrderType[splited_values[1]]
+                            order.__dict__[
+                                'type'] = StrategyOrderType[splited_values[1]]
                         elif splited_values[0] == 'StrategyOrderState':
-                            order.__dict__['state'] = StrategyOrderState[splited_values[1]]
+                            order.__dict__[
+                                'state'] = StrategyOrderState[splited_values[1]]
                         elif splited_values[0] == 'Coin':
                             order.__dict__['coin'] = Coin[splited_values[1]]
                         else:
                             order.__dict__[key] = float(row[k])
                     else:
-                        break;
+                        break
                     k = k + 1
-                order.from_coin = get_from_coin(order.pair, order.type )
+                order.from_coin = get_from_coin(order.pair, order.type)
                 order.to_coin = get_to_coin(order.pair, order.type)
                 retval.append(order)
     return retval
 
-def get_from_coin(pair: Pair, order_type: StrategyOrderType )->Coin:
+
+def get_from_coin(pair: Pair, order_type: StrategyOrderType) -> Coin:
     retval = Coin.UNDEFINED
     if pair == Pair.OMGETH:
         if order_type == StrategyOrderType.LIMIT_SELL:
@@ -111,7 +114,8 @@ def get_from_coin(pair: Pair, order_type: StrategyOrderType )->Coin:
         raise Exception('Unsupported pair {} at get_from_coin'.format(pair))
     return retval
 
-def get_to_coin(pair: Pair, order_type: StrategyOrderType )->str:
+
+def get_to_coin(pair: Pair, order_type: StrategyOrderType) -> str:
     retval = Coin.UNDEFINED
     if pair == Pair.OMGETH:
         if order_type == StrategyOrderType.LIMIT_SELL:

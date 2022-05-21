@@ -2,13 +2,15 @@ import csv
 from typing import List
 from .coins import Coin
 
+
 class Wallet():
-    def __init__(self, coin :Coin, amount: float) -> None:
+    def __init__(self, coin: Coin, amount: float) -> None:
         self.coin = coin
         self.amount = amount
-    
+
     def _fields(self):
         return [self.coin, self.amount]
+
 
 def save_wallet_to_file(filename: str, wallets: List[Wallet]):
     with open(filename, 'w', newline='') as csvfile:
@@ -29,7 +31,7 @@ def load_wallets_from_file(filename: str) -> List[Wallet]:
             if keys is None:
                 keys = row
             else:
-                wallet = Wallet(Coin.UNDEFINED,0.0)
+                wallet = Wallet(Coin.UNDEFINED, 0.0)
                 k = 0
                 for key in keys:
                     splited_values = row[k].split('.')

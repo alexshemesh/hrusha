@@ -12,7 +12,7 @@ def compare_lists(list1: list, list2: list) -> bool:
     retval = True
     if len(list1) != len(list2):
         retval = False
-    for i in range(0,len(list1)):
+    for i in range(0, len(list1)):
         if list1[i] != list2[i]:
             retval = False
             break

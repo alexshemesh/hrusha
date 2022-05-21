@@ -1,2 +1,4 @@
 autopep8
 pytest
+pep8
+pylint
