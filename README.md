@@ -1,3 +1,4 @@
+[![Lint And Test](https://github.com/alexshemesh/hrusha/actions/workflows/tets.yml/badge.svg)](https://github.com/alexshemesh/hrusha/actions/workflows/tets.yml)
 # hrusha
 Set of fintech automations.
 
