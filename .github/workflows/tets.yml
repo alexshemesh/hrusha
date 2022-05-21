@@ -1,5 +1,12 @@
 jobs:
   build:
+    on:
+    push:
+      branches:
+        - master
+    pull_request:
+      branches:
+        - master
     runs-on: ubuntu-latest
     strategy:
       matrix:
