@@ -1,4 +1,8 @@
-from .strategy_order import StrategyOrderState, StrategyOrderType, load_orders_from_file, StrategyOrder, save_orders_to_file
+from .strategy_order import StrategyOrderState, \
+                            StrategyOrderType, \
+                            load_orders_from_file, \
+                            StrategyOrder, \
+                            save_orders_to_file
 from typing import List, Dict
 from .coins import Coin
 from .wallet import Wallet, load_wallets_from_file, save_wallet_to_file

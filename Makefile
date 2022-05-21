@@ -14,7 +14,7 @@ init_env:
 	source .env/bin/activate
 
 lint:
-	pep8 --max-line-length 120 --exclude=.env .
+	pycodestyle --max-line-length 120 --exclude=.env .
 
 format:
 	autopep8 --max-line-length 120 --in-place --aggressive -r .
