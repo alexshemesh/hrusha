@@ -1,50 +1,33 @@
-import os
-import sys
+import configparser
 import asyncio
-import time
-sys.path.append('../../../')
+from bitfinex import BitfinexClient
 
-from bfxapi import Client
+cfg_file_name = '/home/stan/.hrusha/config.ini'
 
-bfx = Client(
-  logLevel='DEBUG',
-)
 
-now = int(round(time.time() * 1000))
-then = now - (1000 * 60 * 60 * 24 * 10) # 10 days ago
+async def main():
+    print('Starting')
+    config = configparser.ConfigParser()
+    res = config.read(cfg_file_name)
+    if len(res) == 0:
+        print('Failed to read config file', cfg_file_name)
+        exit(1)
+    print('Get wallets info')
+    bfx_client = BitfinexClient(
+        api_key=config['bitfinex']['API_KEY'],
+        api_secret=config['bitfinex']['API_SECRET'])
+    wallets = await bfx_client.get_wallets()
 
-async def log_historical_candles():
-  candles = await bfx.rest.get_public_candles('tBTCUSD', 0, then)
-  print ("Candles:")
-  [ print (c) for c in candles ]
+    for w in wallets:
+        print('Wallet data:', w.balance, w.currency)
 
-async def log_historical_trades():
-  trades = await bfx.rest.get_public_trades('tBTCUSD', 0, then)
-  print ("Trades:")
-  [ print (t) for t in trades ]
+    ticker = await bfx_client.get_ticker(symbol='tOMGETH')
+    print('Ticker:', ticker[0])
 
-async def log_books():
-  orders = await bfx.rest.get_public_books('tBTCUSD')
-  print ("Order book:")
-  [ print (o) for o in orders ]
+    orders = await bfx_client.get_orders(symbol='tOMGETH')
 
-async def log_ticker():
-  ticker = await bfx.rest.get_public_ticker('tOMGETH')
-  print ("Ticker:")
-  print (ticker)
+    for o in orders:
+        print('Order data:', o.cid, o.price, o.status, o.tag)
 
-async def log_mul_tickers():
-  tickers = await bfx.rest.get_public_tickers(['tBTCUSD', 'tETHBTC'])
-  print ("Tickers:")
-  print (tickers)
-
-async def log_derivative_status():
-  status = await bfx.rest.get_derivative_status('tBTCF0:USTF0')
-  print ("Deriv status:")
-  print (status)
-
-async def run():
-  await log_ticker()
-  
-t = asyncio.ensure_future(run())
-asyncio.get_event_loop().run_until_complete(t)
+if __name__ == '__main__':
+    asyncio.run(main())
