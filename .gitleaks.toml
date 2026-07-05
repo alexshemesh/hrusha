@@ -1,0 +1,25 @@
+# gitleaks config — used by the pre-commit hook (`make hooks`) and CI.
+# Extends the default ruleset with a rule catching raw Ethereum addresses:
+# personal wallet addresses belong only in ~/.hrusha/config.yaml, never in
+# the repo. Public protocol contract addresses (Aerodrome voter, Morpho,
+# 40acres) are expected to live under hrusha/adapters/ and are allowlisted
+# there. Test fixtures must use the synthetic-address convention
+# (repeated single hex digit, e.g. 0x1111...1111), allowlisted below.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ethereum-address"
+description = "Raw Ethereum address — wallet addresses must stay out of the public repo"
+regex = '''0x[0-9a-fA-F]{40}'''
+
+[rules.allowlist]
+paths = [
+    '''hrusha/adapters/.*''',  # public protocol contract addresses only
+]
+# Synthetic test addresses: one hex character repeated 40 times.
+# (Spelled out because gitleaks uses Go RE2, which has no backreferences.)
+regexes = [
+    '''(?i)0x(0{40}|1{40}|2{40}|3{40}|4{40}|5{40}|6{40}|7{40}|8{40}|9{40}|a{40}|b{40}|c{40}|d{40}|e{40}|f{40})''',
+]

@@ -128,3 +128,15 @@ dmypy.json
 # Pyre type checker
 .pyre/
 .vscode
+# hrusha guardrails — private data must never reach the public repo
+config.yaml
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.env*
+*service-account*.json
+/data/
+.hrusha/

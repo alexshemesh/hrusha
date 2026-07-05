@@ -1,0 +1,6 @@
+# Whitelist approach: nothing enters the build context unless listed.
+# The image must never contain config, databases, or local state.
+*
+!pyproject.toml
+!README.md
+!hrusha/

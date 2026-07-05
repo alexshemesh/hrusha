@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hrusha"
+version = "0.1.0"
+description = "Personal crypto income monitor on Base: balances, transfers, fees, per-source neto"
+readme = "README.md"
+requires-python = ">=3.12"
+# Pinned exactly; upgrades are deliberate (see docs/IMPLEMENTATION_PLAN.md, Phase 8 adds Dependabot).
+dependencies = [
+    "PyYAML==6.0.3",
+    "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.15.20",
+]
+
+[project.scripts]
+hrusha = "hrusha.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["hrusha*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "S",   # bandit security checks
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",  # pytest tests assert by design
+    "S105",  # tests use deliberately fake secrets to verify they are never echoed
+]

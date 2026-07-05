@@ -1,20 +1,30 @@
 SHELL := /bin/bash
+PYTHON ?= python3.12
+VENV := .venv
 
 test:
 	pytest .
 
-prepare:
-	pip install -r requirements.txt
-	pip install -r requirements-dev.txt
-
-make_env:
-	python -m venv .env 
-
-init_env:
-	source .env/bin/activate
-
 lint:
-	pycodestyle --max-line-length 120 --exclude=.env .
+	ruff check .
+	ruff format --check .
 
 format:
-	autopep8 --max-line-length 120 --in-place --aggressive -r .
+	ruff format .
+	ruff check --fix .
+
+prepare:
+	pip install -e '.[dev]'
+
+venv:
+	$(PYTHON) -m venv $(VENV)
+	@echo "run: source $(VENV)/bin/activate && make prepare hooks"
+
+hooks:
+	install -m 0755 scripts/githooks/pre-commit .git/hooks/pre-commit
+	@echo "gitleaks pre-commit hook installed"
+
+leaks:
+	gitleaks git --redact
+
+.PHONY: test lint format prepare venv hooks leaks
