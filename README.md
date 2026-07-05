@@ -1,8 +1,9 @@
-[![Lint And Test](https://github.com/alexshemesh/hrusha/actions/workflows/tets.yml/badge.svg)](https://github.com/alexshemesh/hrusha/actions/workflows/tets.yml)
+[![Lint And Test](https://github.com/alexshemesh/hrusha/actions/workflows/test.yml/badge.svg)](https://github.com/alexshemesh/hrusha/actions/workflows/test.yml)
 # hrusha
 
-Personal ETH portfolio monitor: track token balances, transfers in/out, gas
-fees, and profits across several Ethereum addresses.
+Personal crypto income monitor on Base: track token balances, transfers
+in/out, gas fees, and neto profit per income source (Aerodrome voting,
+Morpho, 40acres) across several addresses.
 
 Data providers: **Alchemy** (balances + USD prices + transfers, free tier)
 and **Etherscan** (exact gas-fee accounting, free tier). PnL is computed
@@ -11,26 +12,22 @@ provider comparison (DeBank, Alchemy, MetaMask/Infura, Zerion, Moralis,
 Etherscan), and [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 for the phased build plan.
 
-# Dependencies
-- Python 3.8 or higher. See installation [instructions here](https://www.python.org/downloads/)
-- Use python virtual environments
-```
-# Create virtual env
-python -m venv ~/.env/hrusha
-# Activate virtual env
-source ~/.env/hrusha/bin/activate
-```
+# Development setup
+Requires Python 3.12+ (`brew install python@3.12`) and
+[gitleaks](https://github.com/gitleaks/gitleaks) for the pre-commit secret
+scan (`brew install gitleaks`).
 
-- install dependencies
-```
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+```bash
+make venv                      # create .venv with python3.12
+source .venv/bin/activate
+make prepare                   # pip install -e '.[dev]'
+make hooks                     # install the gitleaks pre-commit hook — do not skip
 ```
 
 # Configuration
 Configuration lives in `~/.hrusha/config.yaml` — **created manually,
-outside the repo, never committed**. The service refuses to start without
-it and tells you exactly what is missing.
+outside the repo, never committed**. The CLI refuses to start without it
+and tells you exactly what is missing (without echoing values).
 ```yaml
 addresses:
   main: "0xYourFirstAddress"
@@ -42,19 +39,40 @@ alchemy:
 etherscan:
   api_key: "your etherscan key"
 
+# optional; defaults to ~/.hrusha/hrusha.db (the container sets /data/hrusha.db)
+# db_path: "~/.hrusha/hrusha.db"
+
 # later, for the Sheets export:
 # sheets:
 #   spreadsheet_id: "..."
 #   service_account_file: "~/.hrusha/service-account.json"
 ```
+Override the config location with the `HRUSHA_CONFIG` environment
+variable (the Docker image sets it to `/config/config.yaml`).
 
-# Tests
-Tests are regular pytest set. Read here [more](https://docs.pytest.org/en/7.1.x/)</br>
+# Usage
+```bash
+hrusha sync --dry-run    # read config, connect to Alchemy, print ETH balances
 ```
-pytest .
+The full sync, reports, and the dashboard arrive with Phases 1–5 of
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+
+Via Docker:
+```bash
+docker build -t hrusha .
+docker run --rm -v ~/.hrusha:/config:ro hrusha sync --dry-run
 ```
 
-# Execute
-The service CLI (`hrusha sync`, `hrusha balances`, ...) arrives with
-Phase 0/1 of [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
-Nothing runnable ships yet.
+# Tests & lint
+```bash
+make test     # pytest
+make lint     # ruff check + format check
+make leaks    # full-history gitleaks scan
+```
+
+# Security
+The repo is public; private data never enters it:
+- addresses and API keys live only in `~/.hrusha/config.yaml`
+- `.gitignore` blocks `config.yaml`, databases, `.env*`, service-account files
+- a gitleaks pre-commit hook (`make hooks`) and a CI job scan every change
+- error messages and logs never echo config values

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Blocks commits containing secrets or raw wallet addresses.
+# Installed into .git/hooks by `make hooks`. Uses .gitleaks.toml at repo root.
+set -euo pipefail
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "pre-commit: gitleaks is not installed (brew install gitleaks)" >&2
+    echo "pre-commit: refusing to commit without a leak scan" >&2
+    exit 1
+fi
+
+exec gitleaks git --pre-commit --staged --redact --verbose
