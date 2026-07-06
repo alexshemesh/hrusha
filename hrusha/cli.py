@@ -1,8 +1,11 @@
 """hrusha command-line interface.
 
-Phase 0 ships `hrusha sync --dry-run`: read the config, connect to
-Alchemy, print native ETH balances per configured address. The full
-sync (transfers, fees, ledger writes) arrives with Phase 1.
+Commands (Phase 1):
+  sync            full sync: transfers, fees, balance snapshots -> SQLite
+  sync --dry-run  read config, connect to Alchemy, print ETH balances only
+  balances        live token balances with USD values (not from the ledger)
+  transfers       recent ledger transfers with tags
+  fees            gas spent, total and per period
 
 Exit codes: 0 ok, 2 config problem, 3 provider problem.
 """
@@ -12,16 +15,25 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 import uuid
+from datetime import UTC, datetime
 
 from hrusha import __version__
 from hrusha.config import Config, ConfigError, load_config
+from hrusha.ledger import reports
+from hrusha.ledger.store import open_ledger
 from hrusha.logs import setup_logging
-from hrusha.providers.alchemy_rpc import ProviderError, fetch_eth_balances
+from hrusha.prices import PriceResolver
+from hrusha.providers.alchemy_rpc import AlchemyProvider, ProviderError, fetch_eth_balances
+from hrusha.providers.blockscout import BlockscoutProvider
+from hrusha.service.sync import run_full_sync
 
 EXIT_OK = 0
 EXIT_CONFIG_ERROR = 2
 EXIT_PROVIDER_ERROR = 3
+
+SECONDS_PER_DAY = 86400
 
 log = logging.getLogger("hrusha.cli")
 
@@ -30,10 +42,30 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     setup_logging(logging.DEBUG if args.verbose else logging.INFO)
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    try:
+        return run_command(args, config)
+    except ProviderError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_PROVIDER_ERROR
+
+
+def run_command(args: argparse.Namespace, config: Config) -> int:
+    if args.command == "sync" and args.dry_run:
+        return run_dry_run(config)
     if args.command == "sync":
-        return run_sync(dry_run=args.dry_run)
-    parser.error(f"unknown command: {args.command}")
-    return EXIT_CONFIG_ERROR  # unreachable; parser.error raises SystemExit
+        return run_sync(config)
+    if args.command == "balances":
+        return run_balances(config)
+    if args.command == "transfers":
+        return run_transfers(config, limit=args.limit)
+    if args.command == "fees":
+        return run_fees(config, days=args.days)
+    raise AssertionError(f"unhandled command: {args.command}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,47 +83,107 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read config, connect to Alchemy, print ETH balances; write nothing",
     )
+
+    balances = subparsers.add_parser("balances", help="live token balances with USD values")
+    del balances  # no extra arguments
+
+    transfers = subparsers.add_parser("transfers", help="recent transfers from the ledger")
+    transfers.add_argument("--limit", type=int, default=25, help="rows to show (default 25)")
+
+    fees = subparsers.add_parser("fees", help="gas fees paid, from the ledger")
+    fees.add_argument("--days", type=int, default=30, help="look-back window (default 30)")
     return parser
 
 
-def run_sync(dry_run: bool) -> int:
-    sync_run_id = uuid.uuid4().hex[:12]
-    try:
-        config = load_config()
-    except ConfigError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_CONFIG_ERROR
-
-    if not dry_run:
-        print(
-            "error: full sync arrives with Phase 1 (docs/IMPLEMENTATION_PLAN.md); "
-            "use `hrusha sync --dry-run`",
-            file=sys.stderr,
-        )
-        return EXIT_CONFIG_ERROR
-
-    log.info(
-        "dry-run sync started",
-        extra={"sync_run_id": sync_run_id, "address_count": len(config.addresses)},
-    )
-    try:
-        balances = fetch_eth_balances(config.alchemy_api_key, config.addresses)
-    except ProviderError as exc:
-        log.error("provider call failed", extra={"sync_run_id": sync_run_id})
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_PROVIDER_ERROR
-
-    print_balances(config, balances)
-    log.info("dry-run sync finished", extra={"sync_run_id": sync_run_id})
-    return EXIT_OK
-
-
-def print_balances(config: Config, balances: dict[str, object]) -> None:
+def run_dry_run(config: Config) -> int:
+    balances = fetch_eth_balances(config.alchemy_api_key, config.addresses)
     label_width = max(len(label) for label in balances)
     print(f"ETH balances on Base ({len(balances)} addresses):")
     for label, amount in balances.items():
-        address = config.addresses[label]
-        print(f"  {label:<{label_width}}  {address}  {amount:.6f} ETH")
+        print(f"  {label:<{label_width}}  {config.addresses[label]}  {amount:.6f} ETH")
+    return EXIT_OK
+
+
+def run_sync(config: Config) -> int:
+    sync_run_id = uuid.uuid4().hex[:12]
+    log.info("full sync starting", extra={"sync_run_id": sync_run_id})
+    provider = AlchemyProvider(config.alchemy_api_key)
+    conn = open_ledger(config.db_path)
+    try:
+        summary = run_full_sync(
+            config,
+            provider,
+            conn,
+            PriceResolver(conn, provider),
+            transfer_source=BlockscoutProvider(),
+        )
+    finally:
+        conn.close()
+    print(
+        f"sync {summary.sync_run_id}: "
+        f"{summary.transfers.events_inserted} transfers ingested "
+        f"({summary.transfers.own_transfers_tagged} own-transfers), "
+        f"{summary.fees.events_inserted} fee events, "
+        f"{summary.transfers.events_skipped + summary.fees.events_skipped} duplicates skipped, "
+        f"{summary.balance_snapshots} balance snapshots"
+    )
+    return EXIT_OK
+
+
+def run_balances(config: Config) -> int:
+    provider = AlchemyProvider(config.alchemy_api_key)
+    balances = provider.balances(config.addresses)
+    label_by_address = {address: label for label, address in config.addresses.items()}
+    total_usd = 0.0
+    print(f"{'wallet':<10} {'token':<12} {'amount':>24} {'USD':>14}")
+    for b in sorted(balances, key=lambda b: -(float(b.usd_value or 0))):
+        usd = f"{float(b.usd_value):>14,.2f}" if b.usd_value is not None else f"{'?':>14}"
+        total_usd += float(b.usd_value or 0)
+        wallet = label_by_address.get(b.address, b.address[:8])
+        print(f"{wallet:<10} {b.token[:12]:<12} {b.amount:>24,.6f} {usd}")
+    print(f"{'total':<10} {'':<12} {'':>24} {total_usd:>14,.2f}")
+    return EXIT_OK
+
+
+def run_transfers(config: Config, limit: int) -> int:
+    conn = open_ledger(config.db_path)
+    try:
+        rows = reports.recent_transfers(conn, limit=limit)
+    finally:
+        conn.close()
+    if not rows:
+        print("no transfers in the ledger yet — run `hrusha sync` first")
+        return EXIT_OK
+    label_by_address = {address: label for label, address in config.addresses.items()}
+    print(
+        f"{'when (UTC)':<17} {'dir':<4} {'wallet':<8} {'token':<10} "
+        f"{'amount':>18} {'USD':>12}  tags"
+    )
+    for row in rows:
+        when = datetime.fromtimestamp(row.ts, tz=UTC).strftime("%Y-%m-%d %H:%M")
+        direction = "in" if row.kind == "transfer_in" else "out"
+        usd = f"{row.usd_at_time:>12,.2f}" if row.usd_at_time is not None else f"{'?':>12}"
+        wallet = label_by_address.get(row.address, row.address[:8])
+        print(
+            f"{when:<17} {direction:<4} {wallet:<8} {row.token[:10]:<10} "
+            f"{float(row.amount_native):>18,.6f} {usd}  {row.tags}"
+        )
+    return EXIT_OK
+
+
+def run_fees(config: Config, days: int) -> int:
+    conn = open_ledger(config.db_path)
+    try:
+        summary = reports.fee_summary(conn, since_ts=int(time.time()) - days * SECONDS_PER_DAY)
+    finally:
+        conn.close()
+    print(
+        f"gas over the last {days} days: {summary.tx_count} txs, "
+        f"{summary.total_eth} ETH, ${summary.total_usd:,.2f}"
+    )
+    if summary.unpriced_count:
+        print(f"note: {summary.unpriced_count} fee events have no USD price yet")
+    return EXIT_OK
 
 
 if __name__ == "__main__":

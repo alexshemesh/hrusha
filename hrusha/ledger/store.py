@@ -82,6 +82,19 @@ SCHEMA_MIGRATIONS: tuple[str, ...] = (
         value TEXT NOT NULL
     );
     """,
+    # v2 — Phase 1: counterparty/contract on events (tag rules match on
+    # counterparty; re-pricing needs the contract), daily USD price cache
+    """
+    ALTER TABLE events ADD COLUMN counterparty TEXT;
+    ALTER TABLE events ADD COLUMN contract TEXT;
+
+    CREATE TABLE price_cache (
+        token TEXT NOT NULL,                        -- 'ETH' or lowercase contract address
+        day   TEXT NOT NULL,                        -- 'YYYY-MM-DD' (UTC)
+        usd   REAL,                                 -- NULL = looked up, not found
+        PRIMARY KEY (token, day)
+    );
+    """,
 )
 
 SCHEMA_VERSION = len(SCHEMA_MIGRATIONS)
