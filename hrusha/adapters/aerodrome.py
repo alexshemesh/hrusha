@@ -139,6 +139,7 @@ class VeNft:
     id: int
     locked_aero: Decimal
     voting_amount: Decimal
+    rebase_aero: Decimal  # pending rebase; claims auto-compound into the lock
     expires_at: int  # 0 for permanent locks
     voted_at: int
     permanent: bool
@@ -270,6 +271,7 @@ def _venft_from_tuple(raw: tuple) -> VeNft:
         id=nft["id"],
         locked_aero=Decimal(nft["amount"]) / scale,
         voting_amount=Decimal(nft["voting_amount"]) / scale,
+        rebase_aero=Decimal(nft["rebase_amount"]) / scale,
         expires_at=nft["expires_at"],
         voted_at=nft["voted_at"],
         permanent=nft["permanent"],

@@ -49,8 +49,16 @@ def make_fee(**overrides) -> TxFee:
 class FakeProvider:
     """In-memory DataProvider for sync/CLI tests."""
 
-    def __init__(self, api_key: str = "unused", transfers=None, fees=None, balances=None):
+    def __init__(
+        self,
+        api_key: str = "unused",
+        transfers=None,
+        fees=None,
+        balances=None,
+        nft_transfers=None,
+    ):
         self._transfers = transfers if transfers is not None else [make_transfer()]
+        self._nft_transfers = nft_transfers if nft_transfers is not None else []
         self._fees = fees if fees is not None else []
         self._balances = (
             balances
@@ -67,6 +75,7 @@ class FakeProvider:
             ]
         )
         self.transfer_calls: list[tuple[str, int]] = []
+        self.nft_calls: list[tuple[str, int]] = []
 
     def balances(self, addresses):
         return self._balances
@@ -74,6 +83,10 @@ class FakeProvider:
     def transfers(self, address, since_block):
         self.transfer_calls.append((address, since_block))
         return [t for t in self._transfers if t.address == address and t.block >= since_block]
+
+    def nft_transfers(self, address, since_block):
+        self.nft_calls.append((address, since_block))
+        return [t for t in self._nft_transfers if t.address == address and t.block >= since_block]
 
     def tx_fees(self, tx_hashes, address):
         wanted = set(tx_hashes)

@@ -47,6 +47,22 @@ def token_row(**overrides) -> dict:
     return row
 
 
+def nft_row(**overrides) -> dict:
+    row = {
+        "hash": TX_2,
+        "blockNumber": str(BLOCK_1 + 5),
+        "timeStamp": str(TS_1 + 10),
+        "from": OUTSIDER,
+        "to": MAIN,
+        "contractAddress": TOKEN_CONTRACT,
+        "tokenSymbol": "veNFT",
+        "tokenID": "76592",
+        "logIndex": None,
+    }
+    row.update(overrides)
+    return row
+
+
 def ok(rows: list) -> httpx.Response:
     return httpx.Response(200, json={"status": "1", "message": "OK", "result": rows})
 
@@ -93,6 +109,34 @@ def test_token_transfers_in_one_tx_get_distinct_ordinals():
     provider = provider_returning(tokentx=[token_row(), token_row(value="100")])
     transfers = provider.transfers(MAIN, since_block=0)
     assert [t.log_index for t in transfers] == [0, 1]
+
+
+def nft_provider_returning(rows) -> BlockscoutProvider:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["action"] == "tokennfttx"
+        return ok(list(rows) if int(request.url.params["page"]) == 1 else [])
+
+    return BlockscoutProvider(http=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+def test_nft_transfers_carry_token_id_and_amount_one():
+    provider = nft_provider_returning([nft_row()])
+    (transfer,) = provider.nft_transfers(MAIN, since_block=0)
+    assert transfer.token_id == "76592"
+    assert transfer.amount == Decimal(1)
+    assert transfer.direction == "in"
+    assert transfer.counterparty == OUTSIDER
+    assert transfer.contract == TOKEN_CONTRACT
+    assert transfer.token == "veNFT"
+
+
+def test_nft_ordinals_cannot_collide_with_erc20_ordinals():
+    # same tx: an ERC-20 leg gets ordinal 0, the NFT leg must not reuse it —
+    # UNIQUE(tx_hash, log_index, kind) would silently drop one of them
+    provider = nft_provider_returning([nft_row(), nft_row(tokenID="76593")])
+    transfers = provider.nft_transfers(MAIN, since_block=0)
+    indexes = [t.log_index for t in transfers]
+    assert indexes == [blockscout.NFT_ORDINAL_BASE, blockscout.NFT_ORDINAL_BASE + 1]
 
 
 def test_spam_token_symbol_is_sanitized():

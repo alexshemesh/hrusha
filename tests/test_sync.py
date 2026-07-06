@@ -84,6 +84,27 @@ def test_transfer_source_overrides_provider_for_transfers(tmp_path):
     conn.close()
 
 
+def test_nft_transfers_use_their_own_cursor(tmp_path):
+    config = make_config(tmp_path)
+    provider = FakeProvider(transfers=[])
+    source = FakeProvider(
+        transfers=[make_transfer(block=BLOCK_1 + 50)],
+        nft_transfers=[make_transfer(log_index=100_000, token_id="76592", block=BLOCK_1)],
+    )
+    conn = open_ledger(config.db_path)
+
+    run_full_sync(config, provider, conn, offline_resolver(conn, provider), transfer_source=source)
+    run_full_sync(config, provider, conn, offline_resolver(conn, provider), transfer_source=source)
+
+    # the NFT cursor starts at 0 and advances independently of the main one,
+    # so shipping NFT support after the first backfill still fetches history
+    assert source.nft_calls[0] == (MAIN, 0)
+    assert source.nft_calls[2] == (MAIN, BLOCK_1 + 1)
+    assert source.transfer_calls[2] == (MAIN, BLOCK_1 + 51)
+    assert conn.execute("SELECT COUNT(*) FROM events WHERE token_id IS NOT NULL").fetchone() == (1,)
+    conn.close()
+
+
 def test_snapshots_written(tmp_path):
     config = make_config(tmp_path)
     provider = FakeProvider(transfers=[])

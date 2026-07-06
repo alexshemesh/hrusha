@@ -11,6 +11,11 @@ from __future__ import annotations
 
 import sqlite3
 
+# keccak256("Transfer(address,address,uint256)") — the universal ERC-20/721
+# Transfer event topic; a public chain constant, not an address (it lives
+# here because this path is the repo's one allowlisted home for hex literals)
+TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
 # token contracts (Base mainnet)
 AERO_CONTRACT = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"  # Aerodrome
 USDC_CONTRACT = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"  # native Circle USDC
@@ -32,6 +37,7 @@ VOTING_ESCROW = "0xebf418fe2512e7e6bd9b87a8f0f294acdc67e6b4"
 FORTY_ACRES_VAULT = "0xb99b6df96d4d5448cc0a5b3e0ef7896df9507cf5"  # AERO-USDC-Vault
 
 SOURCE_AERODROME = "aerodrome-voting"
+SOURCE_AERODROME_REBASE = "aerodrome-rebase"  # anti-dilution AERO, compounds into the lock
 SOURCE_MORPHO = "morpho"
 SOURCE_40ACRES = "40acres"
 

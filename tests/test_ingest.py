@@ -46,6 +46,19 @@ def test_own_transfer_tagged(ledger):
     assert tagged == [(TX_OWN,)]
 
 
+def test_nft_transfer_stored_with_token_id_and_never_priced(ledger):
+    nft = make_transfer(token="veNFT", token_id="76592", amount=Decimal(1))
+
+    def exploding_price(token_key, ts):
+        raise AssertionError("NFTs must not trigger price lookups")
+
+    stats = ingest_transfers(ledger, [nft], TRACKED, exploding_price)
+    assert stats.events_inserted == 1
+    token_id, usd = ledger.execute("SELECT token_id, usd_at_time FROM events").fetchone()
+    assert token_id == "76592"
+    assert usd is None
+
+
 def test_fee_ingest_dedups_and_prices(ledger):
     fees = [make_fee(amount_eth=Decimal("0.0002"))]
     ts_by_tx = {fees[0].tx_hash: 1_750_000_000}

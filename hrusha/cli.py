@@ -9,8 +9,13 @@ Commands (Phases 1-2):
   report          neto per epoch x source (USD; --coins for native amounts)
   tag             manually tag an event by id (always wins over rules)
   retag           re-run tag rules + epoch assignment over the whole ledger
+  doctor          reconcile ledger net flows against live on-chain balances
+  heal            repair the gaps doctor finds, from raw chain receipts
+  rules export    back up tag rules + manual tags to ~/.hrusha/rules.yaml
+  rules import    restore them into (a possibly rebuilt) ledger
 
-Exit codes: 0 ok, 2 config problem, 3 provider problem, 4 bad reference.
+Exit codes: 0 ok, 2 config problem, 3 provider problem, 4 bad reference,
+5 doctor found discrepancies.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ import sys
 import time
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from hrusha import __version__
 from hrusha.adapters.aerodrome import AerodromeAdapter
@@ -28,7 +34,7 @@ from hrusha.adapters.forty_acres import FortyAcresAdapter
 from hrusha.adapters.known_contracts import seed_default_rules
 from hrusha.adapters.morpho import MorphoAdapter
 from hrusha.config import Config, ConfigError, load_config
-from hrusha.ledger import reports
+from hrusha.ledger import reports, rules_io
 from hrusha.ledger import tags as tags_module
 from hrusha.ledger.store import open_ledger
 from hrusha.logs import setup_logging
@@ -41,6 +47,7 @@ EXIT_OK = 0
 EXIT_CONFIG_ERROR = 2
 EXIT_PROVIDER_ERROR = 3
 EXIT_NOT_FOUND = 4
+EXIT_RECONCILE_MISMATCH = 5
 
 SECONDS_PER_DAY = 86400
 
@@ -86,6 +93,12 @@ def run_command(args: argparse.Namespace, config: Config) -> int:
         return run_tag(config, event_id=args.event_id, tag=args.tag)
     if args.command == "retag":
         return run_retag(config)
+    if args.command == "doctor":
+        return run_doctor(config)
+    if args.command == "heal":
+        return run_heal(config)
+    if args.command == "rules":
+        return run_rules(config, action=args.action, path=args.path)
     raise AssertionError(f"unhandled command: {args.command}")
 
 
@@ -133,6 +146,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     retag = subparsers.add_parser("retag", help="re-run tag rules and epoch assignment")
     del retag  # no extra arguments
+
+    doctor = subparsers.add_parser(
+        "doctor", help="reconcile ledger history against live on-chain balances"
+    )
+    del doctor  # no extra arguments
+
+    heal = subparsers.add_parser(
+        "heal", help="repair ledger gaps found by doctor, from raw chain data"
+    )
+    del heal  # no extra arguments
+
+    rules = subparsers.add_parser("rules", help="back up / restore local tag rules and manual tags")
+    rules.add_argument("action", choices=("export", "import"))
+    rules.add_argument(
+        "--path",
+        default=None,
+        help=f"YAML file (default {rules_io.DEFAULT_RULES_PATH}; keep it out of any repo)",
+    )
     return parser
 
 
@@ -226,8 +257,9 @@ def run_transfers(config: Config, limit: int) -> int:
         direction = "in" if row.kind == "transfer_in" else "out"
         usd = f"{row.usd_at_time:>12,.2f}" if row.usd_at_time is not None else f"{'?':>12}"
         wallet = label_by_address.get(row.address, row.address[:8])
+        token = f"{row.token}#{row.token_id}" if row.token_id else row.token
         print(
-            f"{row.id:>6} {when:<17} {direction:<4} {wallet:<8} {row.token[:10]:<10} "
+            f"{row.id:>6} {when:<17} {direction:<4} {wallet:<8} {token[:10]:<10} "
             f"{float(row.amount_native):>18,.6f} {usd}  {(row.source or ''):<18} {row.tags}"
         )
     return EXIT_OK
@@ -315,6 +347,88 @@ def run_retag(config: Config) -> int:
         f"retag: {stats.rules_run} rules run, {stats.tags_applied} tags applied, "
         f"{stats.sources_set} sources set, {stats.epochs_assigned} epochs assigned"
     )
+    return EXIT_OK
+
+
+def run_doctor(config: Config) -> int:
+    from hrusha.service.doctor import chain_readers, reconcile
+
+    erc20_balance, nft_balance, native_balance = chain_readers(_base_w3(config))
+    conn = open_ledger(config.db_path)
+    try:
+        rows = reconcile(conn, config.addresses, erc20_balance, nft_balance, native_balance)
+    finally:
+        conn.close()
+    label_by_address = {address: label for label, address in config.addresses.items()}
+    problems = [r for r in rows if not r.ok]
+    print(f"checked {len(rows)} (address, token) pairs; {len(problems)} discrepancies")
+    if not problems:
+        print("ledger history fully explains current on-chain balances")
+        return EXIT_OK
+    print(f"{'wallet':<8} {'token':<12} {'ledger':>20} {'on-chain':>20} {'diff':>18}  note")
+    for r in problems:
+        wallet = label_by_address.get(r.address, r.address[:8])
+        onchain = f"{r.onchain:>20,.6f}" if r.onchain is not None else f"{'?':>20}"
+        diff = f"{r.diff:>18,.6f}" if r.diff is not None else f"{'?':>18}"
+        print(f"{wallet:<8} {r.token[:12]:<12} {r.ledger:>20,.6f} {onchain} {diff}  {r.note}")
+    print(
+        "positive diff = the ledger is missing inflows (or the token pays "
+        "yield in place); negative = missing outflows"
+    )
+    return EXIT_RECONCILE_MISMATCH
+
+
+def run_heal(config: Config) -> int:
+    from hrusha.service.heal import W3ChainReader, heal
+
+    provider = AlchemyProvider(config.alchemy_api_key)
+    reader = W3ChainReader(_base_w3(config))
+    conn = open_ledger(config.db_path)
+    try:
+        stats = heal(conn, config.addresses, reader, PriceResolver(conn, provider), provider)
+        if stats.transfers.events_inserted or stats.fees.events_inserted:
+            tags_module.retag_all(conn, set(config.addresses.values()))
+    finally:
+        conn.close()
+    print(
+        f"heal: {stats.tokens_checked} used tokens checked, {stats.gaps_healed} gaps healed, "
+        f"{stats.transfers.events_inserted} transfers + {stats.fees.events_inserted} fee "
+        f"events ingested"
+    )
+    for note in stats.unexplained:
+        print(f"unexplained: {note}")
+    if stats.gaps_healed:
+        print("re-run `hrusha doctor` to verify; healed legs are tagged and epoch-assigned")
+    return EXIT_OK if not stats.unexplained else EXIT_RECONCILE_MISMATCH
+
+
+def run_rules(config: Config, action: str, path: str | None) -> int:
+    rules_path = Path(path).expanduser() if path else rules_io.DEFAULT_RULES_PATH.expanduser()
+    conn = open_ledger(config.db_path)
+    try:
+        if action == "export":
+            stats = rules_io.export_local(conn, rules_path)
+            print(
+                f"exported {stats.rules} rules and {stats.manual_tags} manual tags "
+                f"to {rules_path} (owner-only; never commit this file)"
+            )
+            return EXIT_OK
+        if not rules_path.is_file():
+            print(f"error: no backup found at {rules_path}", file=sys.stderr)
+            return EXIT_NOT_FOUND
+        stats = rules_io.import_local(conn, rules_path)
+    finally:
+        conn.close()
+    print(
+        f"imported {stats.rules_added} rules ({stats.rules_existing} already present), "
+        f"{stats.tags_added} manual tags"
+    )
+    if stats.tags_missing_event:
+        print(
+            f"note: {stats.tags_missing_event} manual tags reference events not in the "
+            "ledger yet — run `hrusha sync`, then import again"
+        )
+    print("run `hrusha retag` to apply the imported rules")
     return EXIT_OK
 
 

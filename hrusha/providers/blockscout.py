@@ -45,6 +45,9 @@ MAX_SYMBOL_LENGTH = 32
 
 PAGE_SIZE = 200
 PAGE_LIMIT = 200  # safety cap: 200 pages * 200 rows per action
+# NFT synthetic ordinals live in their own range so an ERC-20 and an ERC-721
+# transfer in the same tx can never collide on UNIQUE(tx_hash, log_index, kind)
+NFT_ORDINAL_BASE = 100_000
 REQUEST_TIMEOUT_SECONDS = 60.0  # first backfill page over a long history is slow
 RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4, 8)
 
@@ -68,6 +71,15 @@ class BlockscoutProvider:
             list(self._pages("tokentx", address, since_block)), address
         )
         return sorted(native + tokens, key=lambda t: (t.block, t.log_index))
+
+    def nft_transfers(self, address: str, since_block: int) -> list[Transfer]:
+        """ERC-721 transfers (`tokennfttx`): veNFT trades, merges, splits.
+
+        Without these, a veNFT bought for tokens looks like tokens vanishing
+        to a stranger — the NFT leg is what lets tagging see the exchange.
+        """
+        rows = list(self._pages("tokennfttx", address, since_block))
+        return sorted(_nft_transfers_from_raw(rows, address), key=lambda t: (t.block, t.log_index))
 
     # -- plumbing -------------------------------------------------------------
 
@@ -209,6 +221,33 @@ def _token_transfer_from_raw(row: dict, address: str, ordinal: int) -> Transfer 
         contract=contract or None,
         amount=Decimal(value) / Decimal(10) ** int(row.get("tokenDecimal") or 0),
     )
+
+
+def _nft_transfers_from_raw(rows: list[dict], address: str) -> list[Transfer]:
+    ordinal_by_tx: dict[str, int] = {}
+    transfers = []
+    for row in rows:
+        ordinal = ordinal_by_tx.get(row["hash"], 0)
+        ordinal_by_tx[row["hash"]] = ordinal + 1
+        contract = (row.get("contractAddress") or "").lower()
+        sender = (row.get("from") or "").lower()
+        recipient = (row.get("to") or "").lower()
+        transfers.append(
+            Transfer(
+                tx_hash=row["hash"],
+                log_index=NFT_ORDINAL_BASE + ordinal,
+                block=int(row["blockNumber"]),
+                ts=int(row["timeStamp"]),
+                direction="out" if sender == address else "in",
+                address=address,
+                counterparty=(recipient if sender == address else sender) or None,
+                token=_clean_symbol(row.get("tokenSymbol"), fallback=contract),
+                contract=contract or None,
+                amount=Decimal(1),
+                token_id=str(row.get("tokenID") or ""),
+            )
+        )
+    return transfers
 
 
 def _clean_symbol(raw: str | None, fallback: str) -> str:
