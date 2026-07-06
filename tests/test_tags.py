@@ -166,6 +166,20 @@ def test_add_rule_rejects_unknown_or_empty_match(ledger):
         add_rule(ledger, 1, {}, ["x"])
 
 
+def test_in_and_out_in_one_tx_is_a_swap(ledger):
+    swap_out = insert_event(ledger, kind="transfer_out", token="USDC")
+    swap_in = insert_event(ledger, kind="transfer_in", token="CBBTC", log_index=1)
+    plain_in = insert_event(ledger, kind="transfer_in", tx_hash=TX_2)
+    gas = insert_event(ledger, kind="gas_fee", log_index=-1, token="ETH", contract=None)
+
+    retag_all(ledger, tracked_addresses=set())
+
+    assert "swap" in event_tags(ledger, swap_out)
+    assert "swap" in event_tags(ledger, swap_in)
+    assert "swap" not in event_tags(ledger, plain_in)
+    assert "swap" not in event_tags(ledger, gas)  # gas of a swap tx still counts
+
+
 # -- neto report --------------------------------------------------------------
 
 
@@ -213,6 +227,23 @@ def test_neto_report_excludes_own_transfers_and_counts_unpriced(ledger):
     assert len(rows) == 1  # the own-transfer row is gone entirely
     assert rows[0].income_usd == 0.0
     assert rows[0].unpriced_count == 1
+
+
+def test_neto_report_excludes_swap_legs_and_honors_date_range(ledger):
+    insert_event(ledger, kind="transfer_out", token="USDC", usd_at_time=50.0)  # swap leg
+    insert_event(ledger, kind="transfer_in", token="CBBTC", log_index=1, usd_at_time=49.9)
+    income = insert_event(ledger, kind="transfer_in", tx_hash=TX_2, usd_at_time=10.0)
+    del income
+    retag_all(ledger, tracked_addresses=set())
+
+    rows = reports.neto_by_epoch_source(ledger)
+    assert len(rows) == 1
+    assert rows[0].income_usd == 10.0  # both swap legs invisible
+    assert rows[0].spend_usd == 0.0
+
+    # until_ts is exclusive: a window ending on the event's ts excludes it
+    assert reports.neto_by_epoch_source(ledger, until_ts=TS_1) == []
+    assert len(reports.neto_by_epoch_source(ledger, since_ts=TS_1, until_ts=TS_1 + 1)) == 1
 
 
 def test_coins_report_sums_native_amounts_exactly(ledger):

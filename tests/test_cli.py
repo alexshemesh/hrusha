@@ -7,7 +7,7 @@ import hrusha.cli as cli
 from hrusha.config import CONFIG_PATH_ENV_VAR
 from hrusha.prices import PriceResolver
 from hrusha.providers.alchemy_rpc import ProviderError
-from tests.conftest import COLD, MAIN, FakeProvider, make_fee, make_transfer
+from tests.conftest import COLD, MAIN, TX_OWN, FakeProvider, make_fee, make_transfer
 
 
 def offline_resolver(conn, provider) -> PriceResolver:
@@ -90,7 +90,11 @@ def test_full_sync_then_reports(config_file, monkeypatch, capsys):
 
 def test_report_tag_and_retag_commands(config_file, monkeypatch, capsys):
     provider = FakeProvider(
-        transfers=[make_transfer(direction="in"), make_transfer(log_index=8, direction="out")],
+        # distinct txs: an in+out pair in ONE tx would (correctly) be a swap
+        transfers=[
+            make_transfer(direction="in", tx_hash=TX_OWN),
+            make_transfer(log_index=8, direction="out"),
+        ],
         fees=[make_fee()],
     )
     monkeypatch.setattr(cli, "AlchemyProvider", lambda api_key: provider)

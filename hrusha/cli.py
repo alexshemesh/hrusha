@@ -72,7 +72,13 @@ def run_command(args: argparse.Namespace, config: Config) -> int:
     if args.command == "fees":
         return run_fees(config, days=args.days)
     if args.command == "report":
-        return run_report(config, days=args.days, coins=args.coins)
+        return run_report(
+            config,
+            days=args.days,
+            coins=args.coins,
+            date_from=args.date_from,
+            date_to=args.date_to,
+        )
     if args.command == "tag":
         return run_tag(config, event_id=args.event_id, tag=args.tag)
     if args.command == "retag":
@@ -107,6 +113,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = subparsers.add_parser("report", help="neto per epoch x source")
     report.add_argument("--days", type=int, default=90, help="look-back window (default 90)")
+    report.add_argument(
+        "--from",
+        dest="date_from",
+        metavar="YYYY-MM-DD",
+        help="period start (UTC, overrides --days)",
+    )
+    report.add_argument(
+        "--to", dest="date_to", metavar="YYYY-MM-DD", help="period end (UTC, exclusive)"
+    )
     report.add_argument("--coins", action="store_true", help="native coin amounts, not USD")
 
     tag = subparsers.add_parser("tag", help="manually tag an event (see ids in `transfers`)")
@@ -194,12 +209,25 @@ def run_transfers(config: Config, limit: int) -> int:
     return EXIT_OK
 
 
-def run_report(config: Config, days: int, coins: bool) -> int:
-    since_ts = int(time.time()) - days * SECONDS_PER_DAY
+def run_report(
+    config: Config,
+    days: int,
+    coins: bool,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    try:
+        since_ts = (
+            _parse_utc_date(date_from) if date_from else int(time.time()) - days * SECONDS_PER_DAY
+        )
+        until_ts = _parse_utc_date(date_to) if date_to else None
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
     conn = open_ledger(config.db_path)
     try:
         if coins:
-            rows = reports.coins_by_epoch_source(conn, since_ts=since_ts)
+            rows = reports.coins_by_epoch_source(conn, since_ts=since_ts, until_ts=until_ts)
             if not rows:
                 print("no events in the window — run `hrusha sync` first")
                 return EXIT_OK
@@ -210,7 +238,7 @@ def run_report(config: Config, days: int, coins: bool) -> int:
                     f"{float(amount):>24,.6f}"
                 )
             return EXIT_OK
-        rows = reports.neto_by_epoch_source(conn, since_ts=since_ts)
+        rows = reports.neto_by_epoch_source(conn, since_ts=since_ts, until_ts=until_ts)
     finally:
         conn.close()
     if not rows:
@@ -228,6 +256,13 @@ def run_report(config: Config, days: int, coins: bool) -> int:
         )
     print("neto = income - gas, USD at event time; own-transfers excluded")
     return EXIT_OK
+
+
+def _parse_utc_date(raw: str) -> int:
+    try:
+        return int(datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC).timestamp())
+    except ValueError:
+        raise ValueError(f"invalid date {raw!r}; expected YYYY-MM-DD") from None
 
 
 def run_tag(config: Config, event_id: int, tag: str) -> int:

@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 OWN_TRANSFER_TAG = "own-transfer"
 CLAIM_TAG = "claim"
 REINVEST_TAG = "reinvest"
+SWAP_TAG = "swap"  # in+out in one tx: an exchange, not money added or removed
 REINVEST_WINDOW_SECONDS = 12 * 3600  # a swap this soon after a claim is a reinvest
 
 SECONDS_PER_WEEK = 604_800  # epochs flip Thu 00:00 UTC; unix epoch was a Thursday
@@ -103,6 +104,7 @@ def retag_all(conn: sqlite3.Connection, tracked_addresses: set[str]) -> TagStats
                 )
                 stats.sources_set += cursor.rowcount
         stats.sources_set += _inherit_gas_source(conn)
+        stats.tags_applied += _tag_swaps(conn)
         stats.tags_applied += _tag_reinvests(conn)
     stats.epochs_assigned = assign_epochs(conn)
     return stats
@@ -201,6 +203,28 @@ def _inherit_gas_source(conn: sqlite3.Connection) -> int:
             WHERE e3.tx_hash = events.tx_hash AND e3.source IS NOT NULL
           )
         """
+    )
+    return cursor.rowcount
+
+
+def _tag_swaps(conn: sqlite3.Connection) -> int:
+    """A transaction moving tokens both in and out of the same address is a
+    swap: neither side is income or a withdrawal, only the value difference
+    (already reflected in balances) matters."""
+    cursor = conn.execute(
+        f"""
+        INSERT OR IGNORE INTO tags (event_id, tag, origin)
+        SELECT e.id, '{SWAP_TAG}', 'rule'
+        FROM events e
+        WHERE e.kind IN ('transfer_in', 'transfer_out')
+          AND EXISTS (
+            SELECT 1 FROM events other
+            WHERE other.tx_hash = e.tx_hash
+              AND other.address = e.address
+              AND other.kind IN ('transfer_in', 'transfer_out')
+              AND other.kind != e.kind
+          )
+        """  # noqa: S608 — SWAP_TAG is a module constant
     )
     return cursor.rowcount
 
