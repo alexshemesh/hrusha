@@ -12,6 +12,9 @@ requires-python = ">=3.12"
 dependencies = [
     "PyYAML==6.0.3",
     "httpx==0.28.1",
+    # contract reads for protocol adapters (Aerodrome Sugar etc.); the
+    # alternative is hand-rolled ABI encoding of nested dynamic structs
+    "web3==7.16.0",
 ]
 
 [project.optional-dependencies]

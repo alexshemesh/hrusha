@@ -246,6 +246,26 @@ def test_neto_report_excludes_swap_legs_and_honors_date_range(ledger):
     assert len(reports.neto_by_epoch_source(ledger, since_ts=TS_1, until_ts=TS_1 + 1)) == 1
 
 
+def test_locking_into_escrow_is_not_spend(ledger):
+    from hrusha.adapters.known_contracts import VOTING_ESCROW, seed_default_rules
+
+    lock = insert_event(
+        ledger,
+        kind="transfer_out",
+        token="AERO",
+        counterparty=VOTING_ESCROW,
+        usd_at_time=45.77,
+    )
+    seeded_first = seed_default_rules(ledger)
+    seeded_again = seed_default_rules(ledger)
+    retag_all(ledger, tracked_addresses=set())
+
+    assert seeded_first >= 3 and seeded_again == 0  # additive once, then idempotent
+    assert "lock" in event_tags(ledger, lock)
+    rows = reports.neto_by_epoch_source(ledger)
+    assert rows == [] or all(r.spend_usd == 0.0 for r in rows)  # the lock is not spend
+
+
 def test_coins_report_sums_native_amounts_exactly(ledger):
     insert_event(ledger, amount_native="0.1")
     insert_event(ledger, tx_hash=TX_2, amount_native="0.2")

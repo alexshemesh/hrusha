@@ -30,6 +30,12 @@ OWN_TRANSFER_TAG = "own-transfer"
 CLAIM_TAG = "claim"
 REINVEST_TAG = "reinvest"
 SWAP_TAG = "swap"  # in+out in one tx: an exchange, not money added or removed
+LOCK_TAG = "lock"  # tokens entering an escrow/lock: still yours, not spend
+UNLOCK_TAG = "unlock"  # tokens coming back out of a lock: not income
+
+# tags whose events are money changing FORM or PLACE, not being made or
+# spent — reports exclude them from income/spend
+NON_FLOW_TAGS = (OWN_TRANSFER_TAG, SWAP_TAG, LOCK_TAG, UNLOCK_TAG)
 REINVEST_WINDOW_SECONDS = 12 * 3600  # a swap this soon after a claim is a reinvest
 
 SECONDS_PER_WEEK = 604_800  # epochs flip Thu 00:00 UTC; unix epoch was a Thursday
@@ -140,7 +146,8 @@ def add_rule(
     with conn:
         cursor = conn.execute(
             "INSERT INTO tag_rules (priority, match_json, tags, source) VALUES (?, ?, ?, ?)",
-            (priority, json.dumps(match), ",".join(tags), source),
+            # sort_keys: canonical form, so rule existence checks can compare strings
+            (priority, json.dumps(match, sort_keys=True), ",".join(tags), source),
         )
     return cursor.lastrowid
 

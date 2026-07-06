@@ -23,6 +23,7 @@ import uuid
 from datetime import UTC, datetime
 
 from hrusha import __version__
+from hrusha.adapters.aerodrome import AerodromeAdapter
 from hrusha.adapters.known_contracts import seed_default_rules
 from hrusha.config import Config, ConfigError, load_config
 from hrusha.ledger import reports
@@ -154,6 +155,7 @@ def run_sync(config: Config) -> int:
             conn,
             PriceResolver(conn, provider),
             transfer_source=BlockscoutProvider(),
+            aerodrome=make_aerodrome_adapter(config),
         )
     finally:
         conn.close()
@@ -163,9 +165,17 @@ def run_sync(config: Config) -> int:
         f"({summary.transfers.own_transfers_tagged} own-transfers), "
         f"{summary.fees.events_inserted} fee events, "
         f"{summary.transfers.events_skipped + summary.fees.events_skipped} duplicates skipped, "
-        f"{summary.balance_snapshots} balance snapshots"
+        f"{summary.balance_snapshots} balance snapshots, "
+        f"{summary.aerodrome_snapshots} aerodrome snapshots"
     )
     return EXIT_OK
+
+
+def make_aerodrome_adapter(config: Config) -> AerodromeAdapter:
+    from web3 import Web3  # deferred: web3 import costs ~0.5s, only sync needs it
+
+    rpc_url = f"https://base-mainnet.g.alchemy.com/v2/{config.alchemy_api_key}"
+    return AerodromeAdapter(Web3(Web3.HTTPProvider(rpc_url)))
 
 
 def run_balances(config: Config) -> int:
@@ -254,7 +264,10 @@ def run_report(
             f"{row.spend_usd:>12,.2f} {row.gas_usd:>10,.2f} {row.neto_usd:>12,.2f}"
             f"  {row.unpriced_count or ''}"
         )
-    print("neto = income - gas, USD at event time; own-transfers excluded")
+    print(
+        "neto = income - gas, USD at event time; "
+        "own-transfers, swap legs and lock/unlock moves excluded"
+    )
     return EXIT_OK
 
 

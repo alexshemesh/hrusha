@@ -15,7 +15,12 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from hrusha.adapters.known_contracts import seed_default_rules
+from hrusha.adapters.aerodrome import AerodromeAdapter, discover_claim_rules
+from hrusha.adapters.known_contracts import (
+    AERO_CONTRACT,
+    SOURCE_AERODROME,
+    seed_default_rules,
+)
 from hrusha.config import Config
 from hrusha.ledger.ingest import IngestStats, ingest_fees, ingest_transfers
 from hrusha.ledger.tags import retag_all
@@ -34,6 +39,7 @@ class SyncSummary:
     transfers: IngestStats = field(default_factory=IngestStats)
     fees: IngestStats = field(default_factory=IngestStats)
     balance_snapshots: int = 0
+    aerodrome_snapshots: int = 0  # veNFT positions + claimables
 
 
 def run_full_sync(
@@ -42,15 +48,24 @@ def run_full_sync(
     conn: sqlite3.Connection,
     prices: PriceResolver,
     transfer_source: TransferSource | None = None,
+    aerodrome: AerodromeAdapter | None = None,
 ) -> SyncSummary:
     """Sync the ledger. Transfers come from `transfer_source` (defaults to
-    `provider`); balances, receipts and prices always come from `provider`."""
+    `provider`); balances, receipts and prices always come from `provider`;
+    the optional Aerodrome adapter contributes claim rules and position/
+    claimable snapshots."""
     summary = SyncSummary(sync_run_id=uuid.uuid4().hex[:12])
     transfer_source = transfer_source or provider
     tracked = set(config.addresses.values())
     for label, address in config.addresses.items():
         _sync_address(conn, provider, transfer_source, prices, summary, label, address, tracked)
     seed_default_rules(conn)
+    if aerodrome is not None:
+        rules_added = discover_claim_rules(conn, aerodrome)
+        log.info(
+            "aerodrome claim rules discovered",
+            extra={"sync_run_id": summary.sync_run_id, "rules_added": rules_added},
+        )
     tag_stats = retag_all(conn, tracked)
     log.info(
         "tagging finished",
@@ -63,6 +78,8 @@ def run_full_sync(
         },
     )
     summary.balance_snapshots = _snapshot_balances(conn, provider, config)
+    if aerodrome is not None:
+        summary.aerodrome_snapshots = _snapshot_aerodrome(conn, aerodrome, config, prices)
     log.info(
         "sync finished",
         extra={
@@ -133,6 +150,57 @@ def _snapshot_balances(conn: sqlite3.Connection, provider: DataProvider, config:
                 ),
             )
     return len(balances)
+
+
+def _snapshot_aerodrome(
+    conn: sqlite3.Connection,
+    aerodrome: AerodromeAdapter,
+    config: Config,
+    prices: PriceResolver,
+) -> int:
+    """Write veNFT lock positions and pending claimables as snapshots."""
+    now = int(time.time())
+    count = 0
+    with conn:
+        for address in config.addresses.values():
+            for nft in aerodrome.venfts(address):
+                aero_price = prices.usd_price(AERO_CONTRACT, now)
+                conn.execute(
+                    """
+                    INSERT INTO snapshots (ts, chain, address, kind, token, source,
+                                           amount_native, usd_at_time)
+                    VALUES (?, ?, ?, 'position', 'AERO', ?, ?, ?)
+                    """,
+                    (
+                        now,
+                        CHAIN,
+                        address,
+                        SOURCE_AERODROME,
+                        str(nft.locked_aero),
+                        float(nft.locked_aero * aero_price) if aero_price is not None else None,
+                    ),
+                )
+                count += 1
+                for claimable in aerodrome.claimables(nft.id):
+                    price = prices.usd_price(claimable.token, now)
+                    conn.execute(
+                        """
+                        INSERT INTO snapshots (ts, chain, address, kind, token, source,
+                                               amount_native, usd_at_time)
+                        VALUES (?, ?, ?, 'claimable', ?, ?, ?, ?)
+                        """,
+                        (
+                            now,
+                            CHAIN,
+                            address,
+                            claimable.token,
+                            SOURCE_AERODROME,
+                            str(claimable.amount),
+                            float(claimable.amount * price) if price is not None else None,
+                        ),
+                    )
+                    count += 1
+    return count
 
 
 def _cursor(conn: sqlite3.Connection, address: str) -> int:
