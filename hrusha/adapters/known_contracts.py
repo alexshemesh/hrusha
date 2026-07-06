@@ -16,6 +16,13 @@ AERO_CONTRACT = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"  # Aerodrome
 USDC_CONTRACT = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"  # native Circle USDC
 WETH_CONTRACT = "0x4200000000000000000000000000000000000006"  # OP-stack predeploy
 
+# Aerodrome Sugar helpers (github.com/velodrome-finance/sugar,
+# deployments/base.env); Voter+VeSugar identities confirmed against
+# Blockscout verified sources
+AERODROME_VOTER = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5"
+VE_SUGAR = "0x4d6A741cEE6A8cC5632B2d948C050303F6246D24"
+REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678"
+
 SOURCE_AERODROME = "aerodrome-voting"
 
 # (priority, match, tags, source) — conservative v1 seeds; the Phase 3
