@@ -43,3 +43,7 @@ def setup_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+    # httpx/httpcore log full request URLs at INFO/DEBUG — Alchemy URLs
+    # embed the API key, so those loggers stay at WARNING unconditionally
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)

@@ -32,6 +32,29 @@ def test_reopen_is_idempotent(tmp_path):
     conn.close()
 
 
+def test_migration_from_v1_preserves_data(tmp_path):
+    """Apply only migration 1, insert data, reopen -> v2 applied, data intact."""
+    import sqlite3
+
+    from hrusha.ledger.store import SCHEMA_MIGRATIONS
+
+    db_path = tmp_path / "ledger.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(SCHEMA_MIGRATIONS[0])
+    conn.execute("PRAGMA user_version = 1")
+    insert_event(conn)
+    conn.commit()
+    conn.close()
+
+    migrated = open_ledger(db_path)
+    assert schema_version(migrated) == SCHEMA_VERSION
+    assert migrated.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
+    # v2 additions usable
+    migrated.execute("SELECT counterparty, contract FROM events")
+    migrated.execute("SELECT token, day, usd FROM price_cache")
+    migrated.close()
+
+
 def test_newer_schema_than_build_is_rejected(tmp_path):
     db_path = tmp_path / "ledger.db"
     conn = open_ledger(db_path)

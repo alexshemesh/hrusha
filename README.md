@@ -5,12 +5,14 @@ Personal crypto income monitor on Base: track token balances, transfers
 in/out, gas fees, and neto profit per income source (Aerodrome voting,
 Morpho, 40acres) across several addresses.
 
-Data providers: **Alchemy** (balances + USD prices + transfers, free tier)
-and **Etherscan** (exact gas-fee accounting, free tier). PnL is computed
-locally. See [docs/DESIGN.md](docs/DESIGN.md) for the full design and the
-provider comparison (DeBank, Alchemy, MetaMask/Infura, Zerion, Moralis,
-Etherscan), and [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
-for the phased build plan.
+Data providers: **Blockscout** (transfer history — free, no key),
+**DefiLlama** (historical USD prices — free, no key) and **Alchemy**
+(balances, exact gas fees incl. the Base L1 data fee, price fallback —
+free tier). PnL is computed locally. See [docs/DESIGN.md](docs/DESIGN.md)
+for the design, [docs/design-logs/](docs/design-logs/INDEX.md) for why
+the providers changed, and
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for the
+phased build plan.
 
 # Development setup
 Requires Python 3.12+ (`brew install python@3.12`) and
@@ -53,9 +55,16 @@ variable (the Docker image sets it to `/config/config.yaml`).
 # Usage
 ```bash
 hrusha sync --dry-run    # read config, connect to Alchemy, print ETH balances
+hrusha sync              # full sync: transfers, gas fees, balance snapshots -> SQLite
+hrusha balances          # live token balances with USD values
+hrusha transfers         # recent transfers from the ledger, with tags
+hrusha fees --days 30    # gas spent over a window (includes Base L1 data fee)
 ```
-The full sync, reports, and the dashboard arrive with Phases 1–5 of
-[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+Sync is incremental and idempotent: a per-address block cursor plus a
+dedup constraint make re-runs and overlaps harmless. Transfers between
+your own tracked addresses are auto-tagged `own-transfer` and excluded
+from income/spend. The epoch/source reports and the dashboard arrive
+with Phases 2–5 of [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 Via Docker:
 ```bash
