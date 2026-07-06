@@ -22,23 +22,35 @@ WETH_CONTRACT = "0x4200000000000000000000000000000000000006"  # OP-stack predepl
 AERODROME_VOTER = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5"
 VE_SUGAR = "0x4d6A741cEE6A8cC5632B2d948C050303F6246D24"
 REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678"
+# veAERO escrow (verified as 'VotingEscrow' on Blockscout); AERO sent here
+# is locked into veNFTs — a change of form, not spending
+VOTING_ESCROW = "0xebf418fe2512e7e6bd9b87a8f0f294acdc67e6b4"
 
 SOURCE_AERODROME = "aerodrome-voting"
 
-# (priority, match, tags, source) — conservative v1 seeds; the Phase 3
-# adapter spike replaces token-based guesses with reward-contract matches
+# (priority, match, tags, source) — conservative v1 seeds; the discovered
+# reward-contract rules (priority 50) outrank the token-based guess
 SEED_RULES: tuple[tuple[int, dict, list[str], str | None], ...] = (
     (100, {"contract": AERO_CONTRACT, "direction": "in"}, ["claim", "aero"], SOURCE_AERODROME),
+    (60, {"counterparty": VOTING_ESCROW, "direction": "out"}, ["lock"], SOURCE_AERODROME),
+    (60, {"counterparty": VOTING_ESCROW, "direction": "in"}, ["unlock"], SOURCE_AERODROME),
 )
 
 
 def seed_default_rules(conn: sqlite3.Connection) -> int:
-    """Insert the seed rules if the tag_rules table is empty. Returns rows added."""
-    (count,) = conn.execute("SELECT COUNT(*) FROM tag_rules").fetchone()
-    if count:
-        return 0
+    """Insert any seed rule not already present (by canonical match_json).
+    Idempotent and additive: new seeds reach existing databases too."""
+    import json
+
     from hrusha.ledger.tags import add_rule
 
+    added = 0
     for priority, match, tags, source in SEED_RULES:
-        add_rule(conn, priority, match, tags, source)
-    return len(SEED_RULES)
+        exists = conn.execute(
+            "SELECT 1 FROM tag_rules WHERE match_json = ?",
+            (json.dumps(match, sort_keys=True),),
+        ).fetchone()
+        if exists is None:
+            add_rule(conn, priority, match, tags, source)
+            added += 1
+    return added

@@ -6,6 +6,10 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
+from hrusha.ledger.tags import NON_FLOW_TAGS
+
+_NON_FLOW_PLACEHOLDERS = ",".join("?" * len(NON_FLOW_TAGS))
+
 
 @dataclass(frozen=True)
 class TransferRow:
@@ -64,14 +68,13 @@ def neto_by_epoch_source(
 ) -> list[NetoRow]:
     """Neto per (epoch, source): USD income at event time minus gas.
 
-    Transfers between tracked addresses (tag 'own-transfer') and both legs
-    of in-wallet swaps (tag 'swap') are excluded from income/spend — moving
-    or exchanging money is not making or losing it. Unpriced events are
-    counted, not valued — the report says so rather than silently
-    under-reporting.
+    Non-flow events (NON_FLOW_TAGS: own-transfers, swap legs, lock/unlock
+    escrow moves) are excluded from income/spend — money changing place or
+    form is not being made or lost. Unpriced events are counted, not
+    valued — the report says so rather than silently under-reporting.
     """
     rows = conn.execute(
-        """
+        f"""
         SELECT COALESCE(e.epoch_id, '?'),
                COALESCE(e.source, 'untagged'),
                SUM(CASE WHEN e.kind = 'transfer_in' THEN COALESCE(e.usd_at_time, 0) ELSE 0 END),
@@ -80,11 +83,13 @@ def neto_by_epoch_source(
                SUM(CASE WHEN e.usd_at_time IS NULL THEN 1 ELSE 0 END)
         FROM events e
         WHERE e.ts >= ? AND e.ts < ?
-          AND e.id NOT IN (SELECT event_id FROM tags WHERE tag IN ('own-transfer', 'swap'))
+          AND e.id NOT IN (
+            SELECT event_id FROM tags WHERE tag IN ({_NON_FLOW_PLACEHOLDERS})
+          )
         GROUP BY 1, 2
         ORDER BY 1 DESC, 3 DESC
-        """,
-        (since_ts, until_ts if until_ts is not None else 2**53),
+        """,  # noqa: S608 — placeholders only; values bound below
+        (since_ts, until_ts if until_ts is not None else 2**53, *NON_FLOW_TAGS),
     ).fetchall()
     return [
         NetoRow(
@@ -105,14 +110,16 @@ def coins_by_epoch_source(
 ) -> list[tuple[str, str, str, str, str]]:
     """Native coin amounts per (epoch, source, token, direction) — exact decimals."""
     rows = conn.execute(
-        """
+        f"""
         SELECT COALESCE(e.epoch_id, '?'), COALESCE(e.source, 'untagged'),
                e.token, e.kind, e.amount_native
         FROM events e
         WHERE e.ts >= ? AND e.ts < ? AND e.kind IN ('transfer_in', 'transfer_out')
-          AND e.id NOT IN (SELECT event_id FROM tags WHERE tag IN ('own-transfer', 'swap'))
-        """,
-        (since_ts, until_ts if until_ts is not None else 2**53),
+          AND e.id NOT IN (
+            SELECT event_id FROM tags WHERE tag IN ({_NON_FLOW_PLACEHOLDERS})
+          )
+        """,  # noqa: S608 — placeholders only; values bound below
+        (since_ts, until_ts if until_ts is not None else 2**53, *NON_FLOW_TAGS),
     ).fetchall()
     totals: dict[tuple[str, str, str, str], Decimal] = {}
     for epoch_id, source, token, kind, amount in rows:
