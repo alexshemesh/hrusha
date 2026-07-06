@@ -24,6 +24,7 @@ class TransferRow:
     tx_hash: str
     source: str | None
     tags: str  # comma-joined, '' when untagged
+    token_id: str | None = None  # ERC-721 id; None for fungible transfers
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ def recent_transfers(conn: sqlite3.Connection, limit: int = 50) -> list[Transfer
         """
         SELECT e.id, e.ts, e.kind, e.token, e.amount_native, e.usd_at_time,
                e.address, e.counterparty, e.tx_hash, e.source,
-               COALESCE(GROUP_CONCAT(t.tag, ','), '')
+               COALESCE(GROUP_CONCAT(t.tag, ','), ''), e.token_id
         FROM events e
         LEFT JOIN tags t ON t.event_id = e.id
         WHERE e.kind IN ('transfer_in', 'transfer_out')

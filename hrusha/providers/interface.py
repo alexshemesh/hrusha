@@ -42,6 +42,7 @@ class Transfer:
     token: str  # symbol; 'ETH' for the native coin
     contract: str | None
     amount: Decimal
+    token_id: str | None = None  # ERC-721 id; None for fungible transfers
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,14 @@ class TransferSource(Protocol):
 
     def transfers(self, address: str, since_block: int) -> list[Transfer]:
         """All in/out transfers touching `address` from `since_block`, oldest first."""
+        ...
+
+    def nft_transfers(self, address: str, since_block: int) -> list[Transfer]:
+        """ERC-721 transfers (token_id set, amount 1), oldest first.
+
+        Sync keeps a separate cursor for these so adding NFT support
+        backfills existing ledgers without resetting the main cursor.
+        """
         ...
 
 

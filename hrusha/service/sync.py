@@ -21,6 +21,7 @@ from hrusha.adapters.known_contracts import (
     AERO_CONTRACT,
     SOURCE_40ACRES,
     SOURCE_AERODROME,
+    SOURCE_AERODROME_REBASE,
     SOURCE_MORPHO,
     seed_default_rules,
 )
@@ -33,6 +34,9 @@ from hrusha.providers.interface import DataProvider, TransferSource
 
 CHAIN = "base"
 CURSOR_KEY_TEMPLATE = "transfers_cursor:{address}"
+# NFTs cursor separately: the feature shipped after the first backfills, so
+# a shared cursor would silently skip all historical veNFT trades
+NFT_CURSOR_KEY_TEMPLATE = "nft_cursor:{address}"
 
 log = logging.getLogger("hrusha.sync")
 
@@ -67,6 +71,9 @@ def run_full_sync(
     tracked = set(config.addresses.values())
     for label, address in config.addresses.items():
         _sync_address(conn, provider, transfer_source, prices, summary, label, address, tracked)
+        # not every TransferSource knows ERC-721s (Alchemy fallback doesn't)
+        if hasattr(transfer_source, "nft_transfers"):
+            _sync_address_nfts(conn, provider, transfer_source, prices, summary, address, tracked)
     seed_default_rules(conn)
     if aerodrome is not None:
         rules_added = discover_claim_rules(conn, aerodrome)
@@ -147,6 +154,34 @@ def _sync_address(
     _set_cursor(conn, address, max(t.block for t in transfers) + 1)
 
 
+def _sync_address_nfts(
+    conn: sqlite3.Connection,
+    provider: DataProvider,
+    transfer_source: TransferSource,
+    prices: PriceResolver,
+    summary: SyncSummary,
+    address: str,
+    tracked: set[str],
+) -> None:
+    since_block = _cursor(conn, address, NFT_CURSOR_KEY_TEMPLATE)
+    transfers = transfer_source.nft_transfers(address, since_block=since_block)
+    if not transfers:
+        return
+    log.info(
+        "nft transfers fetched",
+        extra={"sync_run_id": summary.sync_run_id, "count": len(transfers)},
+    )
+    # NFT-only txs (merges, splits) still burn gas; dedup absorbs overlaps
+    outgoing_hashes = [t.tx_hash for t in transfers if t.direction == "out"]
+    fees = provider.tx_fees(outgoing_hashes, address)
+    ts_by_tx = {t.tx_hash: t.ts for t in transfers}
+
+    _merge(summary.transfers, ingest_transfers(conn, transfers, tracked, prices.usd_price))
+    _merge(summary.fees, ingest_fees(conn, fees, ts_by_tx, prices.usd_price))
+
+    _set_cursor(conn, address, max(t.block for t in transfers) + 1, NFT_CURSOR_KEY_TEMPLATE)
+
+
 def _snapshot_balances(conn: sqlite3.Connection, provider: DataProvider, config: Config) -> int:
     now = int(time.time())
     balances = provider.balances(config.addresses)
@@ -199,6 +234,25 @@ def _snapshot_aerodrome(
                     ),
                 )
                 count += 1
+                if nft.rebase_aero > 0:
+                    # pending rebase: claimable AERO that will compound into
+                    # the lock, never through the wallet — snapshot-only
+                    conn.execute(
+                        """
+                        INSERT INTO snapshots (ts, chain, address, kind, token, source,
+                                               amount_native, usd_at_time)
+                        VALUES (?, ?, ?, 'claimable', 'AERO', ?, ?, ?)
+                        """,
+                        (
+                            now,
+                            CHAIN,
+                            address,
+                            SOURCE_AERODROME_REBASE,
+                            str(nft.rebase_aero),
+                            float(nft.rebase_aero * aero_price) if aero_price is not None else None,
+                        ),
+                    )
+                    count += 1
                 for claimable in aerodrome.claimables(nft.id):
                     price = prices.usd_price(claimable.token, now)
                     conn.execute(
@@ -285,19 +339,21 @@ def _snapshot_forty_acres(
     return count
 
 
-def _cursor(conn: sqlite3.Connection, address: str) -> int:
+def _cursor(conn: sqlite3.Connection, address: str, template: str = CURSOR_KEY_TEMPLATE) -> int:
     row = conn.execute(
         "SELECT value FROM sync_state WHERE key = ?",
-        (CURSOR_KEY_TEMPLATE.format(address=address),),
+        (template.format(address=address),),
     ).fetchone()
     return int(row[0]) if row else 0
 
 
-def _set_cursor(conn: sqlite3.Connection, address: str, block: int) -> None:
+def _set_cursor(
+    conn: sqlite3.Connection, address: str, block: int, template: str = CURSOR_KEY_TEMPLATE
+) -> None:
     with conn:
         conn.execute(
             "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
-            (CURSOR_KEY_TEMPLATE.format(address=address), str(block)),
+            (template.format(address=address), str(block)),
         )
 
 

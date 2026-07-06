@@ -95,6 +95,11 @@ SCHEMA_MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (token, day)
     );
     """,
+    # v3 — ERC-721 ingestion: NFT transfers (veNFT trades/merges/splits) get
+    # a token_id; NULL means fungible. amount_native is '1' for NFTs.
+    """
+    ALTER TABLE events ADD COLUMN token_id TEXT;
+    """,
 )
 
 SCHEMA_VERSION = len(SCHEMA_MIGRATIONS)

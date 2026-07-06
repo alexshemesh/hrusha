@@ -69,6 +69,7 @@ def test_venft_parsing_scales_and_lowercases():
         id=76592,
         locked_aero=Decimal(5),
         voting_amount=Decimal(4),
+        rebase_aero=Decimal(0),
         expires_at=0,
         voted_at=1_750_000_000,
         permanent=True,
@@ -125,6 +126,7 @@ def test_sync_writes_position_and_claimable_snapshots(tmp_path):
                     id=1,
                     locked_aero=Decimal(100),
                     voting_amount=Decimal(90),
+                    rebase_aero=Decimal("2.5"),
                     expires_at=0,
                     voted_at=0,
                     permanent=True,
@@ -155,11 +157,14 @@ def test_sync_writes_position_and_claimable_snapshots(tmp_path):
         aerodrome=aerodrome,
     )
 
-    assert summary.aerodrome_snapshots == 2
-    position, claimable = conn.execute(
+    assert summary.aerodrome_snapshots == 3
+    rows = conn.execute(
         "SELECT kind, token, source, amount_native FROM snapshots"
-        " WHERE kind IN ('position', 'claimable') ORDER BY kind DESC"
+        " WHERE kind IN ('position', 'claimable') ORDER BY id"
     ).fetchall()
-    assert position == ("position", "AERO", SOURCE_AERODROME, "100")
-    assert claimable == ("claimable", "0x" + "d" * 40, SOURCE_AERODROME, "12.5")
+    assert rows == [
+        ("position", "AERO", SOURCE_AERODROME, "100"),
+        ("claimable", "AERO", "aerodrome-rebase", "2.5"),
+        ("claimable", "0x" + "d" * 40, SOURCE_AERODROME, "12.5"),
+    ]
     conn.close()

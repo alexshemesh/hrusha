@@ -34,10 +34,21 @@ LOCK_TAG = "lock"  # tokens entering an escrow/lock: still yours, not spend
 UNLOCK_TAG = "unlock"  # tokens coming back out of a lock: not income
 DEPOSIT_TAG = "deposit"  # into a yield position (vault shares etc.)
 WITHDRAW_TAG = "withdraw"  # principal coming back out of a position
+PURCHASE_TAG = "venft-purchase"  # paid tokens, received a veNFT: form change
+# (NFT receipts are invisible to the ERC-20 ledger, so these are manual
+# tags for now; NFT-aware ingestion is a semantics-discussion follow-up)
 
 # tags whose events are money changing FORM or PLACE, not being made or
 # spent — reports exclude them from income/spend
-NON_FLOW_TAGS = (OWN_TRANSFER_TAG, SWAP_TAG, LOCK_TAG, UNLOCK_TAG, DEPOSIT_TAG, WITHDRAW_TAG)
+NON_FLOW_TAGS = (
+    OWN_TRANSFER_TAG,
+    SWAP_TAG,
+    LOCK_TAG,
+    UNLOCK_TAG,
+    DEPOSIT_TAG,
+    WITHDRAW_TAG,
+    PURCHASE_TAG,
+)
 REINVEST_WINDOW_SECONDS = 12 * 3600  # a swap this soon after a claim is a reinvest
 
 SECONDS_PER_WEEK = 604_800  # epochs flip Thu 00:00 UTC; unix epoch was a Thursday

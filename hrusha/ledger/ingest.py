@@ -38,14 +38,17 @@ def ingest_transfers(
     stats = IngestStats()
     with conn:
         for transfer in transfers:
-            price = price_fn(transfer.contract or transfer.token, transfer.ts)
+            if transfer.token_id is not None:
+                price = None  # NFTs have no fungible market price
+            else:
+                price = price_fn(transfer.contract or transfer.token, transfer.ts)
             usd_at_time = float(transfer.amount * price) if price is not None else None
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO events
                     (ts, chain, tx_hash, log_index, block, kind, token, amount_native,
-                     usd_at_time, address, counterparty, contract)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     usd_at_time, address, counterparty, contract, token_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     transfer.ts,
@@ -60,6 +63,7 @@ def ingest_transfers(
                     transfer.address,
                     transfer.counterparty,
                     transfer.contract,
+                    transfer.token_id,
                 ),
             )
             if cursor.rowcount == 0:
