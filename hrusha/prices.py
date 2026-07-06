@@ -77,14 +77,26 @@ class PriceResolver:
             found, price = self._cached(token_key, day)  # chart fill landed here
             if found:
                 return price
-            # the chart covered this day yet the cache still misses:
-            # the token had no price that day — a definitive miss
-            self._store(token_key, day, None)
-            log.warning(
-                "no USD price found",
-                extra={"token": token_key, "day": day, "cached_as_miss": True},
-            )
-            return None
+            if day != _day(int(time.time())):
+                # the chart covered this day yet the cache still misses:
+                # the token had no price that day — a definitive miss
+                self._store(token_key, day, None)
+                log.warning(
+                    "no USD price found",
+                    extra={"token": token_key, "day": day, "cached_as_miss": True},
+                )
+                return None
+            # TODAY may simply not have a chart point yet — that is not
+            # definitive; ask the provider, and never cache a miss for it
+            price, _ = self._provider_price(token_key, ts)
+            if price is not None:
+                self._store(token_key, day, price)
+            else:
+                log.warning(
+                    "no USD price found",
+                    extra={"token": token_key, "day": day, "cached_as_miss": False},
+                )
+            return price
 
         price, definitive = self._provider_price(token_key, ts)
         definitive = definitive and chart_state == CHART_MISSING

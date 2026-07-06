@@ -26,8 +26,14 @@ REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678"
 # is locked into veNFTs — a change of form, not spending
 VOTING_ESCROW = "0xebf418fe2512e7e6bd9b87a8f0f294acdc67e6b4"
 
+# 40acres supply side (docs.40acres.finance/contracts.md, cross-checked
+# on-chain: ERC-4626, asset() == USDC, _loanContract() == the published
+# AERO USDC Loan address)
+FORTY_ACRES_VAULT = "0xb99b6df96d4d5448cc0a5b3e0ef7896df9507cf5"  # AERO-USDC-Vault
+
 SOURCE_AERODROME = "aerodrome-voting"
 SOURCE_MORPHO = "morpho"
+SOURCE_40ACRES = "40acres"
 
 # (priority, match, tags, source) — conservative v1 seeds; the discovered
 # reward-contract rules (priority 50) outrank the token-based guess
@@ -35,6 +41,13 @@ SEED_RULES: tuple[tuple[int, dict, list[str], str | None], ...] = (
     (100, {"contract": AERO_CONTRACT, "direction": "in"}, ["claim", "aero"], SOURCE_AERODROME),
     (60, {"counterparty": VOTING_ESCROW, "direction": "out"}, ["lock"], SOURCE_AERODROME),
     (60, {"counterparty": VOTING_ESCROW, "direction": "in"}, ["unlock"], SOURCE_AERODROME),
+    # 40acres AERO-USDC vault: ERC-4626, so both the asset legs
+    # (counterparty = vault) and the share legs (contract = vault) are
+    # principal movements, not income/spend
+    (55, {"counterparty": FORTY_ACRES_VAULT, "direction": "out"}, ["deposit"], SOURCE_40ACRES),
+    (55, {"counterparty": FORTY_ACRES_VAULT, "direction": "in"}, ["withdraw"], SOURCE_40ACRES),
+    (55, {"contract": FORTY_ACRES_VAULT, "direction": "in"}, ["deposit"], SOURCE_40ACRES),
+    (55, {"contract": FORTY_ACRES_VAULT, "direction": "out"}, ["withdraw"], SOURCE_40ACRES),
 )
 
 

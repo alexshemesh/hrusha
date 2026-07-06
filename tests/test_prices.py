@@ -138,6 +138,30 @@ def test_provider_success_resets_breaker(ledger):
     assert resolver._provider_failures == 0
 
 
+def test_todays_missing_chart_point_is_not_a_definitive_miss(ledger):
+    import time as _time
+
+    now = int(_time.time())
+    coin = f"base:{TOKEN_CONTRACT}"
+    # chart knows yesterday but not today (DefiLlama's 1d point can lag)
+    provider = CountingProvider(Decimal("1.25"))
+    resolver = PriceResolver(
+        ledger, provider, http=llama_http(chart_response(coin, {now - DAY_SECONDS: 1.0}))
+    )
+    assert resolver.usd_price(TOKEN_CONTRACT, now) == Decimal("1.25")  # provider fallback
+    assert provider.calls == 1
+
+    # and if the provider also fails, nothing is cached for today
+    failing = CountingProvider(None, error=ProviderError("HTTP 429"))
+    resolver2 = PriceResolver(
+        ledger, failing, http=llama_http(chart_response(coin, {now - DAY_SECONDS: 1.0}))
+    )
+    ledger.execute("DELETE FROM price_cache")
+    assert resolver2.usd_price(TOKEN_CONTRACT, now) is None
+    cached_today = ledger.execute("SELECT COUNT(*) FROM price_cache WHERE usd IS NULL").fetchone()
+    assert cached_today == (0,)
+
+
 def test_chart_refetched_when_an_earlier_day_is_requested(ledger):
     coin = f"base:{TOKEN_CONTRACT}"
     starts_seen = []
