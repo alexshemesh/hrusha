@@ -88,6 +88,37 @@ def test_full_sync_then_reports(config_file, monkeypatch, capsys):
     assert "1 txs" in capsys.readouterr().out
 
 
+def test_report_tag_and_retag_commands(config_file, monkeypatch, capsys):
+    provider = FakeProvider(
+        transfers=[make_transfer(direction="in"), make_transfer(log_index=8, direction="out")],
+        fees=[make_fee()],
+    )
+    monkeypatch.setattr(cli, "AlchemyProvider", lambda api_key: provider)
+    monkeypatch.setattr(cli, "BlockscoutProvider", lambda: provider)
+    monkeypatch.setattr(cli, "PriceResolver", offline_resolver)
+    assert cli.main(["sync"]) == cli.EXIT_OK
+    capsys.readouterr()
+
+    assert cli.main(["report", "--days", "36500"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "untagged" in out and "neto = income - gas" in out
+    assert "2025-06-12" in out  # TS_1's epoch flip date (Thursday, UTC)
+
+    assert cli.main(["report", "--days", "36500", "--coins"]) == cli.EXIT_OK
+    assert "USDC" in capsys.readouterr().out
+
+    assert cli.main(["tag", "1", "bribe"]) == cli.EXIT_OK
+    assert "manual" in capsys.readouterr().out
+    assert cli.main(["tag", "9999", "bribe"]) == cli.EXIT_NOT_FOUND
+    capsys.readouterr()
+
+    assert cli.main(["retag"]) == cli.EXIT_OK
+    assert "rules run" in capsys.readouterr().out
+
+    assert cli.main(["transfers"]) == cli.EXIT_OK
+    assert "bribe" in capsys.readouterr().out  # manual tag survived the retag
+
+
 def test_balances_command(config_file, monkeypatch, capsys):
     monkeypatch.setattr(cli, "AlchemyProvider", lambda api_key: FakeProvider())
     assert cli.main(["balances"]) == cli.EXIT_OK

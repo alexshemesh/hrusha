@@ -15,8 +15,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from hrusha.adapters.known_contracts import seed_default_rules
 from hrusha.config import Config
 from hrusha.ledger.ingest import IngestStats, ingest_fees, ingest_transfers
+from hrusha.ledger.tags import retag_all
 from hrusha.prices import PriceResolver
 from hrusha.providers.interface import DataProvider, TransferSource
 
@@ -48,6 +50,18 @@ def run_full_sync(
     tracked = set(config.addresses.values())
     for label, address in config.addresses.items():
         _sync_address(conn, provider, transfer_source, prices, summary, label, address, tracked)
+    seed_default_rules(conn)
+    tag_stats = retag_all(conn, tracked)
+    log.info(
+        "tagging finished",
+        extra={
+            "sync_run_id": summary.sync_run_id,
+            "rules_run": tag_stats.rules_run,
+            "tags_applied": tag_stats.tags_applied,
+            "sources_set": tag_stats.sources_set,
+            "epochs_assigned": tag_stats.epochs_assigned,
+        },
+    )
     summary.balance_snapshots = _snapshot_balances(conn, provider, config)
     log.info(
         "sync finished",

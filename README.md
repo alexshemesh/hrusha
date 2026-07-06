@@ -55,16 +55,22 @@ variable (the Docker image sets it to `/config/config.yaml`).
 # Usage
 ```bash
 hrusha sync --dry-run    # read config, connect to Alchemy, print ETH balances
-hrusha sync              # full sync: transfers, gas fees, balance snapshots -> SQLite
+hrusha sync              # full sync: transfers, fees, tagging, snapshots -> SQLite
 hrusha balances          # live token balances with USD values
-hrusha transfers         # recent transfers from the ledger, with tags
+hrusha transfers         # recent transfers from the ledger, with ids, sources, tags
 hrusha fees --days 30    # gas spent over a window (includes Base L1 data fee)
+hrusha report --days 90  # neto per epoch x source (--coins for native amounts)
+hrusha tag 123 bribe     # manually tag event 123 (manual always beats rules)
+hrusha retag             # re-run tag rules + epoch assignment over the ledger
 ```
 Sync is incremental and idempotent: a per-address block cursor plus a
 dedup constraint make re-runs and overlaps harmless. Transfers between
 your own tracked addresses are auto-tagged `own-transfer` and excluded
-from income/spend. The epoch/source reports and the dashboard arrive
-with Phases 2–5 of [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
+from income/spend. Events are grouped into Aerodrome epochs (weekly
+flip, Thu 00:00 UTC); tag rules assign tags and an income source, and
+manual tags always survive re-tagging. Protocol adapters and the web
+dashboard arrive with Phases 3–5 of
+[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
 Via Docker:
 ```bash

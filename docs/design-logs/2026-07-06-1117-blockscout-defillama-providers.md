@@ -1,7 +1,7 @@
 ---
 date: 2026-07-06T11:17
 type: architecture
-status: proposed
+status: merged
 trigger: supersession
 touches:
   - hrusha/providers/blockscout.py
@@ -13,8 +13,8 @@ touches:
 related:
   - 2026-07-05-0842-repurpose-eth-portfolio-monitor.md
 supersedes: null
-commit: null
-pr: null
+commit: 3606811
+pr: https://github.com/alexshemesh/hrusha/pull/3
 ---
 
 # Source transfers from Blockscout and prices from DefiLlama
