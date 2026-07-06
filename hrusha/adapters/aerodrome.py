@@ -22,7 +22,6 @@ known_contracts.py — the gitleaks-allowlisted home for public contracts.
 
 from __future__ import annotations
 
-import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -37,7 +36,7 @@ from hrusha.adapters.known_contracts import (
     SOURCE_AERODROME,
     VE_SUGAR,
 )
-from hrusha.ledger.tags import CLAIM_TAG, add_rule
+from hrusha.ledger.tags import CLAIM_TAG, ensure_rule
 
 AERO_DECIMALS = 18
 POOLS_PER_CALL = 300  # RewardsSugar.rewards scans pools; chunked eth_calls
@@ -260,13 +259,7 @@ def _store_verdict(conn: sqlite3.Connection, address: str, verdict: bool) -> Non
 def _ensure_claim_rule(conn: sqlite3.Connection, counterparty: str) -> bool:
     """Add the claim rule for a reward contract unless it already exists."""
     match = {"counterparty": counterparty, "direction": "in"}
-    exists = conn.execute(
-        "SELECT 1 FROM tag_rules WHERE match_json = ?", (json.dumps(match, sort_keys=True),)
-    ).fetchone()
-    if exists:
-        return False
-    add_rule(conn, CLAIM_RULE_PRIORITY, match, [CLAIM_TAG], SOURCE_AERODROME)
-    return True
+    return ensure_rule(conn, CLAIM_RULE_PRIORITY, match, [CLAIM_TAG], SOURCE_AERODROME)
 
 
 def _venft_from_tuple(raw: tuple) -> VeNft:

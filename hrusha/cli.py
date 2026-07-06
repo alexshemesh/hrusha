@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from hrusha import __version__
 from hrusha.adapters.aerodrome import AerodromeAdapter
 from hrusha.adapters.known_contracts import seed_default_rules
+from hrusha.adapters.morpho import MorphoAdapter
 from hrusha.config import Config, ConfigError, load_config
 from hrusha.ledger import reports
 from hrusha.ledger import tags as tags_module
@@ -156,6 +157,7 @@ def run_sync(config: Config) -> int:
             PriceResolver(conn, provider),
             transfer_source=BlockscoutProvider(),
             aerodrome=make_aerodrome_adapter(config),
+            morpho=MorphoAdapter(),
         )
     finally:
         conn.close()
@@ -166,7 +168,8 @@ def run_sync(config: Config) -> int:
         f"{summary.fees.events_inserted} fee events, "
         f"{summary.transfers.events_skipped + summary.fees.events_skipped} duplicates skipped, "
         f"{summary.balance_snapshots} balance snapshots, "
-        f"{summary.aerodrome_snapshots} aerodrome snapshots"
+        f"{summary.aerodrome_snapshots} aerodrome snapshots, "
+        f"{summary.morpho_snapshots} morpho snapshots"
     )
     return EXIT_OK
 

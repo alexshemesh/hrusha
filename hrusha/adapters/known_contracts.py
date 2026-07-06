@@ -27,6 +27,7 @@ REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678"
 VOTING_ESCROW = "0xebf418fe2512e7e6bd9b87a8f0f294acdc67e6b4"
 
 SOURCE_AERODROME = "aerodrome-voting"
+SOURCE_MORPHO = "morpho"
 
 # (priority, match, tags, source) — conservative v1 seeds; the discovered
 # reward-contract rules (priority 50) outrank the token-based guess
@@ -40,17 +41,9 @@ SEED_RULES: tuple[tuple[int, dict, list[str], str | None], ...] = (
 def seed_default_rules(conn: sqlite3.Connection) -> int:
     """Insert any seed rule not already present (by canonical match_json).
     Idempotent and additive: new seeds reach existing databases too."""
-    import json
+    from hrusha.ledger.tags import ensure_rule
 
-    from hrusha.ledger.tags import add_rule
-
-    added = 0
-    for priority, match, tags, source in SEED_RULES:
-        exists = conn.execute(
-            "SELECT 1 FROM tag_rules WHERE match_json = ?",
-            (json.dumps(match, sort_keys=True),),
-        ).fetchone()
-        if exists is None:
-            add_rule(conn, priority, match, tags, source)
-            added += 1
-    return added
+    return sum(
+        ensure_rule(conn, priority, match, tags, source)
+        for priority, match, tags, source in SEED_RULES
+    )
