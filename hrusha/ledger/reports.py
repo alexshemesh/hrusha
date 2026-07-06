@@ -59,12 +59,16 @@ class NetoRow:
     unpriced_count: int  # events lacking a USD value — the report's honesty note
 
 
-def neto_by_epoch_source(conn: sqlite3.Connection, since_ts: int = 0) -> list[NetoRow]:
+def neto_by_epoch_source(
+    conn: sqlite3.Connection, since_ts: int = 0, until_ts: int | None = None
+) -> list[NetoRow]:
     """Neto per (epoch, source): USD income at event time minus gas.
 
-    Transfers between tracked addresses (tag 'own-transfer') are excluded
-    from income/spend entirely. Unpriced events are counted, not valued —
-    the report says so rather than silently under-reporting.
+    Transfers between tracked addresses (tag 'own-transfer') and both legs
+    of in-wallet swaps (tag 'swap') are excluded from income/spend — moving
+    or exchanging money is not making or losing it. Unpriced events are
+    counted, not valued — the report says so rather than silently
+    under-reporting.
     """
     rows = conn.execute(
         """
@@ -75,12 +79,12 @@ def neto_by_epoch_source(conn: sqlite3.Connection, since_ts: int = 0) -> list[Ne
                SUM(CASE WHEN e.kind = 'gas_fee' THEN COALESCE(e.gas_usd, 0) ELSE 0 END),
                SUM(CASE WHEN e.usd_at_time IS NULL THEN 1 ELSE 0 END)
         FROM events e
-        WHERE e.ts >= ?
-          AND e.id NOT IN (SELECT event_id FROM tags WHERE tag = 'own-transfer')
+        WHERE e.ts >= ? AND e.ts < ?
+          AND e.id NOT IN (SELECT event_id FROM tags WHERE tag IN ('own-transfer', 'swap'))
         GROUP BY 1, 2
         ORDER BY 1 DESC, 3 DESC
         """,
-        (since_ts,),
+        (since_ts, until_ts if until_ts is not None else 2**53),
     ).fetchall()
     return [
         NetoRow(
@@ -97,7 +101,7 @@ def neto_by_epoch_source(conn: sqlite3.Connection, since_ts: int = 0) -> list[Ne
 
 
 def coins_by_epoch_source(
-    conn: sqlite3.Connection, since_ts: int = 0
+    conn: sqlite3.Connection, since_ts: int = 0, until_ts: int | None = None
 ) -> list[tuple[str, str, str, str, str]]:
     """Native coin amounts per (epoch, source, token, direction) — exact decimals."""
     rows = conn.execute(
@@ -105,10 +109,10 @@ def coins_by_epoch_source(
         SELECT COALESCE(e.epoch_id, '?'), COALESCE(e.source, 'untagged'),
                e.token, e.kind, e.amount_native
         FROM events e
-        WHERE e.ts >= ? AND e.kind IN ('transfer_in', 'transfer_out')
-          AND e.id NOT IN (SELECT event_id FROM tags WHERE tag = 'own-transfer')
+        WHERE e.ts >= ? AND e.ts < ? AND e.kind IN ('transfer_in', 'transfer_out')
+          AND e.id NOT IN (SELECT event_id FROM tags WHERE tag IN ('own-transfer', 'swap'))
         """,
-        (since_ts,),
+        (since_ts, until_ts if until_ts is not None else 2**53),
     ).fetchall()
     totals: dict[tuple[str, str, str, str], Decimal] = {}
     for epoch_id, source, token, kind, amount in rows:
