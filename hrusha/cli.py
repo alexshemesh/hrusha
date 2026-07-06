@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 
 from hrusha import __version__
 from hrusha.adapters.aerodrome import AerodromeAdapter
+from hrusha.adapters.forty_acres import FortyAcresAdapter
 from hrusha.adapters.known_contracts import seed_default_rules
 from hrusha.adapters.morpho import MorphoAdapter
 from hrusha.config import Config, ConfigError, load_config
@@ -158,6 +159,7 @@ def run_sync(config: Config) -> int:
             transfer_source=BlockscoutProvider(),
             aerodrome=make_aerodrome_adapter(config),
             morpho=MorphoAdapter(),
+            forty_acres=make_forty_acres_adapter(config),
         )
     finally:
         conn.close()
@@ -169,16 +171,25 @@ def run_sync(config: Config) -> int:
         f"{summary.transfers.events_skipped + summary.fees.events_skipped} duplicates skipped, "
         f"{summary.balance_snapshots} balance snapshots, "
         f"{summary.aerodrome_snapshots} aerodrome snapshots, "
-        f"{summary.morpho_snapshots} morpho snapshots"
+        f"{summary.morpho_snapshots} morpho snapshots, "
+        f"{summary.forty_acres_snapshots} 40acres snapshots"
     )
     return EXIT_OK
 
 
-def make_aerodrome_adapter(config: Config) -> AerodromeAdapter:
+def _base_w3(config: Config):
     from web3 import Web3  # deferred: web3 import costs ~0.5s, only sync needs it
 
     rpc_url = f"https://base-mainnet.g.alchemy.com/v2/{config.alchemy_api_key}"
-    return AerodromeAdapter(Web3(Web3.HTTPProvider(rpc_url)))
+    return Web3(Web3.HTTPProvider(rpc_url))
+
+
+def make_aerodrome_adapter(config: Config) -> AerodromeAdapter:
+    return AerodromeAdapter(_base_w3(config))
+
+
+def make_forty_acres_adapter(config: Config) -> FortyAcresAdapter:
+    return FortyAcresAdapter(_base_w3(config))
 
 
 def run_balances(config: Config) -> int:

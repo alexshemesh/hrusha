@@ -16,8 +16,10 @@ import uuid
 from dataclasses import dataclass, field
 
 from hrusha.adapters.aerodrome import AerodromeAdapter, discover_claim_rules
+from hrusha.adapters.forty_acres import FortyAcresAdapter
 from hrusha.adapters.known_contracts import (
     AERO_CONTRACT,
+    SOURCE_40ACRES,
     SOURCE_AERODROME,
     SOURCE_MORPHO,
     seed_default_rules,
@@ -43,6 +45,7 @@ class SyncSummary:
     balance_snapshots: int = 0
     aerodrome_snapshots: int = 0  # veNFT positions + claimables
     morpho_snapshots: int = 0  # active vault positions
+    forty_acres_snapshots: int = 0  # active supply positions
 
 
 def run_full_sync(
@@ -53,6 +56,7 @@ def run_full_sync(
     transfer_source: TransferSource | None = None,
     aerodrome: AerodromeAdapter | None = None,
     morpho: MorphoAdapter | None = None,
+    forty_acres: FortyAcresAdapter | None = None,
 ) -> SyncSummary:
     """Sync the ledger. Transfers come from `transfer_source` (defaults to
     `provider`); balances, receipts and prices always come from `provider`;
@@ -92,6 +96,8 @@ def run_full_sync(
         summary.aerodrome_snapshots = _snapshot_aerodrome(conn, aerodrome, config, prices)
     if morpho is not None:
         summary.morpho_snapshots = _snapshot_morpho(conn, morpho, config)
+    if forty_acres is not None:
+        summary.forty_acres_snapshots = _snapshot_forty_acres(conn, forty_acres, config, prices)
     log.info(
         "sync finished",
         extra={
@@ -241,6 +247,41 @@ def _snapshot_morpho(conn: sqlite3.Connection, morpho: MorphoAdapter, config: Co
                     ),
                 )
                 count += 1
+    return count
+
+
+def _snapshot_forty_acres(
+    conn: sqlite3.Connection,
+    forty_acres: FortyAcresAdapter,
+    config: Config,
+    prices: PriceResolver,
+) -> int:
+    """Write active 40acres supply positions (USDC redeemable value)."""
+    now = int(time.time())
+    count = 0
+    with conn:
+        for address in config.addresses.values():
+            position = forty_acres.position(address)
+            if position is None:
+                continue
+            price = prices.usd_price(position.asset_contract, now)
+            conn.execute(
+                """
+                INSERT INTO snapshots (ts, chain, address, kind, token, source,
+                                       amount_native, usd_at_time)
+                VALUES (?, ?, ?, 'position', ?, ?, ?, ?)
+                """,
+                (
+                    now,
+                    CHAIN,
+                    address,
+                    position.asset_symbol,
+                    SOURCE_40ACRES,
+                    str(position.assets),
+                    float(position.assets * price) if price is not None else None,
+                ),
+            )
+            count += 1
     return count
 
 

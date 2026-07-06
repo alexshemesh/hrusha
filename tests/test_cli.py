@@ -72,6 +72,7 @@ def test_full_sync_then_reports(config_file, monkeypatch, capsys):
     monkeypatch.setattr(cli, "PriceResolver", offline_resolver)
     monkeypatch.setattr(cli, "make_aerodrome_adapter", lambda config: None)
     monkeypatch.setattr(cli, "MorphoAdapter", lambda: None)
+    monkeypatch.setattr(cli, "make_forty_acres_adapter", lambda config: None)
 
     assert cli.main(["sync"]) == cli.EXIT_OK
     out = capsys.readouterr().out
@@ -104,6 +105,7 @@ def test_report_tag_and_retag_commands(config_file, monkeypatch, capsys):
     monkeypatch.setattr(cli, "PriceResolver", offline_resolver)
     monkeypatch.setattr(cli, "make_aerodrome_adapter", lambda config: None)
     monkeypatch.setattr(cli, "MorphoAdapter", lambda: None)
+    monkeypatch.setattr(cli, "make_forty_acres_adapter", lambda config: None)
     assert cli.main(["sync"]) == cli.EXIT_OK
     capsys.readouterr()
 
