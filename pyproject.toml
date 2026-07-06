@@ -45,4 +45,5 @@ select = [
     "S101",  # pytest tests assert by design
     "S105",  # tests use deliberately fake secrets to verify they are never echoed
     "S106",  # token= keyword args are crypto token symbols, not passwords
+    "S608",  # test helpers build INSERTs from their own literal dicts
 ]
