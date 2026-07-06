@@ -19,8 +19,10 @@ from hrusha.adapters.aerodrome import AerodromeAdapter, discover_claim_rules
 from hrusha.adapters.known_contracts import (
     AERO_CONTRACT,
     SOURCE_AERODROME,
+    SOURCE_MORPHO,
     seed_default_rules,
 )
+from hrusha.adapters.morpho import MorphoAdapter, discover_vault_rules
 from hrusha.config import Config
 from hrusha.ledger.ingest import IngestStats, ingest_fees, ingest_transfers
 from hrusha.ledger.tags import retag_all
@@ -40,6 +42,7 @@ class SyncSummary:
     fees: IngestStats = field(default_factory=IngestStats)
     balance_snapshots: int = 0
     aerodrome_snapshots: int = 0  # veNFT positions + claimables
+    morpho_snapshots: int = 0  # active vault positions
 
 
 def run_full_sync(
@@ -49,6 +52,7 @@ def run_full_sync(
     prices: PriceResolver,
     transfer_source: TransferSource | None = None,
     aerodrome: AerodromeAdapter | None = None,
+    morpho: MorphoAdapter | None = None,
 ) -> SyncSummary:
     """Sync the ledger. Transfers come from `transfer_source` (defaults to
     `provider`); balances, receipts and prices always come from `provider`;
@@ -66,6 +70,12 @@ def run_full_sync(
             "aerodrome claim rules discovered",
             extra={"sync_run_id": summary.sync_run_id, "rules_added": rules_added},
         )
+    if morpho is not None:
+        vault_rules = discover_vault_rules(conn, morpho, list(config.addresses.values()))
+        log.info(
+            "morpho vault rules discovered",
+            extra={"sync_run_id": summary.sync_run_id, "rules_added": vault_rules},
+        )
     tag_stats = retag_all(conn, tracked)
     log.info(
         "tagging finished",
@@ -80,6 +90,8 @@ def run_full_sync(
     summary.balance_snapshots = _snapshot_balances(conn, provider, config)
     if aerodrome is not None:
         summary.aerodrome_snapshots = _snapshot_aerodrome(conn, aerodrome, config, prices)
+    if morpho is not None:
+        summary.morpho_snapshots = _snapshot_morpho(conn, morpho, config)
     log.info(
         "sync finished",
         extra={
@@ -200,6 +212,35 @@ def _snapshot_aerodrome(
                         ),
                     )
                     count += 1
+    return count
+
+
+def _snapshot_morpho(conn: sqlite3.Connection, morpho: MorphoAdapter, config: Config) -> int:
+    """Write active Morpho vault positions (USD valued by Morpho itself)."""
+    now = int(time.time())
+    count = 0
+    with conn:
+        for address in config.addresses.values():
+            for position in morpho.positions(address):
+                if position.assets == 0:
+                    continue  # emptied vault: rules still matter, snapshots don't
+                conn.execute(
+                    """
+                    INSERT INTO snapshots (ts, chain, address, kind, token, source,
+                                           amount_native, usd_at_time)
+                    VALUES (?, ?, ?, 'position', ?, ?, ?, ?)
+                    """,
+                    (
+                        now,
+                        CHAIN,
+                        address,
+                        position.asset_symbol,
+                        SOURCE_MORPHO,
+                        str(position.assets),
+                        position.assets_usd,
+                    ),
+                )
+                count += 1
     return count
 
 

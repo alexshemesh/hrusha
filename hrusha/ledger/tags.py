@@ -32,10 +32,12 @@ REINVEST_TAG = "reinvest"
 SWAP_TAG = "swap"  # in+out in one tx: an exchange, not money added or removed
 LOCK_TAG = "lock"  # tokens entering an escrow/lock: still yours, not spend
 UNLOCK_TAG = "unlock"  # tokens coming back out of a lock: not income
+DEPOSIT_TAG = "deposit"  # into a yield position (vault shares etc.)
+WITHDRAW_TAG = "withdraw"  # principal coming back out of a position
 
 # tags whose events are money changing FORM or PLACE, not being made or
 # spent — reports exclude them from income/spend
-NON_FLOW_TAGS = (OWN_TRANSFER_TAG, SWAP_TAG, LOCK_TAG, UNLOCK_TAG)
+NON_FLOW_TAGS = (OWN_TRANSFER_TAG, SWAP_TAG, LOCK_TAG, UNLOCK_TAG, DEPOSIT_TAG, WITHDRAW_TAG)
 REINVEST_WINDOW_SECONDS = 12 * 3600  # a swap this soon after a claim is a reinvest
 
 SECONDS_PER_WEEK = 604_800  # epochs flip Thu 00:00 UTC; unix epoch was a Thursday
@@ -127,6 +129,23 @@ def set_manual_tag(conn: sqlite3.Connection, event_id: int, tag: str) -> bool:
             " ON CONFLICT (event_id, tag) DO UPDATE SET origin = 'manual'",
             (event_id, tag),
         )
+    return True
+
+
+def ensure_rule(
+    conn: sqlite3.Connection,
+    priority: int,
+    match: dict[str, str],
+    tags: list[str],
+    source: str | None = None,
+) -> bool:
+    """add_rule unless a rule with the same canonical match already exists."""
+    exists = conn.execute(
+        "SELECT 1 FROM tag_rules WHERE match_json = ?", (json.dumps(match, sort_keys=True),)
+    ).fetchone()
+    if exists is not None:
+        return False
+    add_rule(conn, priority, match, tags, source)
     return True
 
 
