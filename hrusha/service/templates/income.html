@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% set active = 'income' %}
+{% block title %}income{% endblock %}
+{% block content %}
+
+<p class="muted">
+  last {{ days }} days ·
+  <a href="/income?days=30{% if coins %}&coins=1{% endif %}">30d</a>
+  <a href="/income?days=90{% if coins %}&coins=1{% endif %}">90d</a>
+  <a href="/income?days=365{% if coins %}&coins=1{% endif %}">1y</a>
+  ·
+  {% if coins %}<a href="/income?days={{ days }}">USD view</a>
+  {% else %}<a href="/income?days={{ days }}&coins=1">coin view</a>{% endif %}
+</p>
+
+{% if coins %}
+<table>
+  <tr><th>epoch</th><th>source</th><th>token</th><th>dir</th><th class="num">amount</th></tr>
+  {% for epoch_id, source, token, direction, amount in coin_rows %}
+  <tr>
+    <td>{{ epoch_id }}</td>
+    <td>{{ source }}</td>
+    <td>{{ token[:20] }}</td>
+    <td>{{ direction }}</td>
+    <td class="num">{{ amount | amount }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">no events in the window</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<table>
+  <tr><th>epoch</th><th>source</th><th class="num">income</th><th class="num">spend</th>
+      <th class="num">gas</th><th class="num">neto</th><th class="num">unpriced</th></tr>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.epoch_id }}</td>
+    <td><a href="/transfers?epoch={{ row.epoch_id | urlencode }}&source={{ row.source | urlencode }}">{{ row.source }}</a></td>
+    <td class="num">{{ row.income_usd | usd }}</td>
+    <td class="num">{{ row.spend_usd | usd }}</td>
+    <td class="num">{{ row.gas_usd | usd }}</td>
+    <td class="num"><b>{{ row.neto_usd | usd }}</b></td>
+    <td class="num">{{ row.unpriced_count or '' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="7" class="muted">no events in the window</td></tr>
+  {% endfor %}
+</table>
+<p class="muted">neto = income − gas, USD at event time; own-transfers, swap legs,
+lock/unlock, deposits/withdrawals and veNFT purchases excluded; unpriced events are
+counted, not valued</p>
+{% endif %}
+
+{% endblock %}

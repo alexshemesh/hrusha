@@ -14,7 +14,7 @@ from hrusha.ledger.tags import (
     retag_all,
     set_manual_tag,
 )
-from tests.conftest import COLD, MAIN, OUTSIDER, TOKEN_CONTRACT, TS_1, TX_1, TX_2
+from tests.conftest import COLD, MAIN, OUTSIDER, TOKEN_CONTRACT, TS_1, TX_1, TX_2, make_transfer
 
 # TS_1 = 1_750_000_000 falls in the epoch that flipped Thu 2025-06-12 00:00 UTC
 EPOCH_OF_TS_1 = "2025-06-12"
@@ -274,3 +274,49 @@ def test_coins_report_sums_native_amounts_exactly(ledger):
     rows = reports.coins_by_epoch_source(ledger)
 
     assert rows == [(EPOCH_OF_TS_1, "untagged", "USDC", "in", str(Decimal("0.3")))]
+
+
+def test_router_vault_deposit_pairs_the_asset_leg(ledger):
+    """Morpho-style deposit: WETH goes to a bundler (no rule matches it), the
+    share mint carries the tag+source — the asset leg must inherit both."""
+    from decimal import Decimal
+
+    from hrusha.ledger.ingest import ingest_transfers
+
+    share_contract = "0x" + "e" * 40
+    router = "0x" + "f" * 40
+    ingest_transfers(
+        ledger,
+        [
+            make_transfer(
+                direction="out",
+                counterparty=router,
+                token="WETH",
+                contract="0x" + "a" * 40,
+                amount=Decimal("0.3"),
+            ),
+            make_transfer(
+                log_index=8,
+                direction="in",
+                counterparty=router,
+                token="CSETH",
+                contract=share_contract,
+                amount=Decimal("0.29"),
+            ),
+        ],
+        tracked_addresses=set(),
+        price_fn=lambda token, ts: None,
+    )
+    add_rule(ledger, 55, {"contract": share_contract, "direction": "in"}, ["deposit"], "morpho")
+    retag_all(ledger, tracked_addresses=set())
+
+    kind_rows = ledger.execute(
+        """
+        SELECT e.kind, e.source, GROUP_CONCAT(t.tag) FROM events e
+        LEFT JOIN tags t ON t.event_id = e.id GROUP BY e.id ORDER BY e.kind
+        """
+    ).fetchall()
+    by_kind = {kind: (source, set((tags or "").split(","))) for kind, source, tags in kind_rows}
+    assert by_kind["transfer_out"][0] == "morpho"  # the money leg found its strategy
+    assert "deposit" in by_kind["transfer_out"][1]
+    assert by_kind["transfer_in"][0] == "morpho"

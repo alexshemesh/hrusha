@@ -6,7 +6,16 @@ import sqlite3
 from dataclasses import dataclass
 from decimal import Decimal
 
-from hrusha.ledger.tags import NON_FLOW_TAGS
+from hrusha.ledger.tags import (
+    DEPOSIT_TAG,
+    LOCK_TAG,
+    NON_FLOW_TAGS,
+    OWN_TRANSFER_TAG,
+    PURCHASE_TAG,
+    SWAP_TAG,
+    UNLOCK_TAG,
+    WITHDRAW_TAG,
+)
 
 _NON_FLOW_PLACEHOLDERS = ",".join("?" * len(NON_FLOW_TAGS))
 
@@ -35,22 +44,177 @@ class FeeSummary:
     unpriced_count: int
 
 
-def recent_transfers(conn: sqlite3.Connection, limit: int = 50) -> list[TransferRow]:
+def recent_transfers(
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    epoch_id: str | None = None,
+    source: str | None = None,
+    tag: str | None = None,
+) -> list[TransferRow]:
+    """Latest transfers, optionally narrowed — the income report's drill-down."""
+    clauses = ["e.kind IN ('transfer_in', 'transfer_out')"]
+    params: list = []
+    if epoch_id is not None:
+        clauses.append("e.epoch_id = ?")
+        params.append(epoch_id)
+    if source is not None:
+        clauses.append("COALESCE(e.source, 'untagged') = ?")
+        params.append(source)
+    if tag is not None:
+        clauses.append("e.id IN (SELECT event_id FROM tags WHERE tag = ?)")
+        params.append(tag)
     rows = conn.execute(
-        """
+        f"""
         SELECT e.id, e.ts, e.kind, e.token, e.amount_native, e.usd_at_time,
                e.address, e.counterparty, e.tx_hash, e.source,
                COALESCE(GROUP_CONCAT(t.tag, ','), ''), e.token_id
         FROM events e
         LEFT JOIN tags t ON t.event_id = e.id
-        WHERE e.kind IN ('transfer_in', 'transfer_out')
+        WHERE {" AND ".join(clauses)}
         GROUP BY e.id
         ORDER BY e.ts DESC, e.id DESC
         LIMIT ?
-        """,
-        (limit,),
+        """,  # noqa: S608 — clauses are literals above; values are bound
+        (*params, limit),
     ).fetchall()
     return [TransferRow(*row) for row in rows]
+
+
+@dataclass(frozen=True)
+class SnapshotRow:
+    ts: int
+    address: str
+    kind: str  # balance|position|claimable
+    token: str
+    source: str | None
+    amount_native: str
+    usd_at_time: float | None
+
+
+SNAPSHOT_SYNC_WINDOW_SECONDS = 600  # one sync writes its snapshot groups seconds apart
+
+# grouping policy for the strategy view (display-level, never stored):
+# rebases are anti-dilution income of the voting strategy, and veNFT
+# purchases are its capital basis even though their payment legs carry
+# no source (they go to marketplaces/sellers, not to Aerodrome)
+_REBASE_SOURCE = "aerodrome-rebase"
+_VOTING_SOURCE = "aerodrome-voting"
+
+
+@dataclass(frozen=True)
+class StrategyRow:
+    source: str
+    deposited_usd: float  # wallet -> strategy: deposits, locks, veNFT purchases
+    withdrawn_usd: float  # strategy -> wallet principal: withdrawals, unlocks
+    income_usd: float  # strategy -> wallet income: claims etc.
+    other_out_usd: float  # source-attributed spending that is none of the above
+    gas_usd: float
+    position_usd: float  # latest position + claimable snapshots
+    profit_usd: float  # income + withdrawn + position - deposited - other - gas
+    unpriced_count: int  # legs that count toward flows but have no USD value
+
+
+def strategy_summary(
+    conn: sqlite3.Connection, snapshots: list[SnapshotRow] | None = None
+) -> list[StrategyRow]:
+    """Lifetime profit per strategy: everything that crossed the wallet<->
+    strategy boundary (USD at event time) plus what the strategy holds now.
+
+    Swap legs are skipped — they are the same value changing form inside a
+    tx whose meaningful leg (the deposit/withdraw side) is counted once.
+    Share mint/burn legs are IN/OUT mirrors of those and fall out of every
+    bucket by direction. Unpriced legs are counted, not valued.
+    """
+    snapshots = snapshots if snapshots is not None else latest_snapshots(conn)
+    totals: dict[str, dict[str, float]] = {}
+
+    def bucket(source: str) -> dict[str, float]:
+        return totals.setdefault(
+            source,
+            {"deposited": 0.0, "withdrawn": 0.0, "income": 0.0, "other_out": 0.0,
+             "gas": 0.0, "position": 0.0, "unpriced": 0},
+        )  # fmt: skip
+
+    rows = conn.execute(
+        """
+        SELECT e.kind, COALESCE(e.source, ''), e.usd_at_time, e.gas_usd,
+               COALESCE(GROUP_CONCAT(t.tag, ','), '')
+        FROM events e
+        LEFT JOIN tags t ON t.event_id = e.id
+        WHERE e.kind IN ('transfer_in', 'transfer_out', 'gas_fee')
+        GROUP BY e.id
+        """
+    ).fetchall()
+    for kind, source, usd, gas_usd, tags_csv in rows:
+        tags = set(tags_csv.split(",")) if tags_csv else set()
+        if PURCHASE_TAG in tags:
+            source = _VOTING_SOURCE
+        elif source == _REBASE_SOURCE:
+            source = _VOTING_SOURCE
+        if not source or OWN_TRANSFER_TAG in tags:
+            continue
+        b = bucket(source)
+        if kind == "gas_fee":
+            b["gas"] += gas_usd or 0.0  # gas_usd is the canonical fee value
+            continue
+        outgoing = kind == "transfer_out"
+        if outgoing and tags & {DEPOSIT_TAG, LOCK_TAG, PURCHASE_TAG}:
+            slot = "deposited"
+        elif not outgoing and tags & {WITHDRAW_TAG, UNLOCK_TAG}:
+            slot = "withdrawn"
+        elif SWAP_TAG in tags:
+            continue  # form change; the counted leg of the tx is elsewhere
+        elif outgoing:
+            slot = "other_out"
+        else:
+            slot = "income"
+        if usd is None:
+            b["unpriced"] += 1
+        else:
+            b[slot] += usd
+
+    for row in snapshots:
+        if row.kind not in ("position", "claimable") or not row.source:
+            continue
+        source = _VOTING_SOURCE if row.source == _REBASE_SOURCE else row.source
+        bucket(source)["position"] += row.usd_at_time or 0.0
+
+    result = [
+        StrategyRow(
+            source=source,
+            deposited_usd=b["deposited"],
+            withdrawn_usd=b["withdrawn"],
+            income_usd=b["income"],
+            other_out_usd=b["other_out"],
+            gas_usd=b["gas"],
+            position_usd=b["position"],
+            profit_usd=b["income"]
+            + b["withdrawn"]
+            + b["position"]
+            - b["deposited"]
+            - b["other_out"]
+            - b["gas"],
+            unpriced_count=int(b["unpriced"]),
+        )
+        for source, b in totals.items()
+    ]
+    return sorted(result, key=lambda r: -r.profit_usd)
+
+
+def latest_snapshots(conn: sqlite3.Connection) -> list[SnapshotRow]:
+    """Snapshots from the most recent sync (all rows within its write window)."""
+    newest = conn.execute("SELECT MAX(ts) FROM snapshots").fetchone()[0]
+    if newest is None:
+        return []
+    rows = conn.execute(
+        """
+        SELECT ts, address, kind, token, source, amount_native, usd_at_time
+        FROM snapshots WHERE ts > ?
+        ORDER BY kind, usd_at_time DESC
+        """,
+        (newest - SNAPSHOT_SYNC_WINDOW_SECONDS,),
+    ).fetchall()
+    return [SnapshotRow(*row) for row in rows]
 
 
 @dataclass(frozen=True)

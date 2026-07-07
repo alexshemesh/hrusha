@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% set active = '' %}
+{% block title %}{{ row.source }}{% endblock %}
+{% block content %}
+
+<h2>{{ row.source }} — lifetime profit {{ row.profit_usd | usd }}</h2>
+
+<table id="flows">
+  <tr>
+    <th class="num">put in</th><th class="num">taken out</th><th class="num">income</th>
+    <th class="num">other out</th><th class="num">gas</th><th class="num">holding now</th>
+    <th class="num">unpriced</th>
+  </tr>
+  <tr>
+    <td class="num">{{ row.deposited_usd | usd }}</td>
+    <td class="num">{{ row.withdrawn_usd | usd }}</td>
+    <td class="num">{{ row.income_usd | usd }}</td>
+    <td class="num">{{ row.other_out_usd | usd }}</td>
+    <td class="num">{{ row.gas_usd | usd }}</td>
+    <td class="num">{{ row.position_usd | usd }}</td>
+    <td class="num">{{ row.unpriced_count or '' }}</td>
+  </tr>
+</table>
+<p class="muted">profit = income + taken out + holding now − put in − other out − gas
+{% if row.source == 'aerodrome-voting' %}
+· includes <a href="/transfers?tag=venft-purchase">veNFT purchases</a> as capital
+and pending rebases as holdings
+{% endif %}
+</p>
+
+<h2 id="epochs">Income by epoch</h2>
+<table>
+  <tr><th>epoch</th><th class="num">income</th><th class="num">spend</th>
+      <th class="num">gas</th><th class="num">neto</th><th class="num">unpriced</th></tr>
+  {% for e in epochs %}
+  <tr>
+    <td><a href="/transfers?epoch={{ e.epoch_id | urlencode }}&source={{ row.source | urlencode }}">{{ e.epoch_id }}</a></td>
+    <td class="num">{{ e.income_usd | usd }}</td>
+    <td class="num">{{ e.spend_usd | usd }}</td>
+    <td class="num">{{ e.gas_usd | usd }}</td>
+    <td class="num"><b>{{ e.neto_usd | usd }}</b></td>
+    <td class="num">{{ e.unpriced_count or '' }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">no per-epoch income recorded</td></tr>
+  {% endfor %}
+</table>
+
+<h2 id="holding">Recent ledger legs ({{ rows | length }})</h2>
+<table>
+  <tr><th>when (UTC)</th><th>dir</th><th>token</th>
+      <th class="num">amount</th><th class="num">USD</th><th>tags</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.ts | when }}</td>
+    <td>{{ 'in' if r.kind == 'transfer_in' else 'out' }}</td>
+    <td>{% if r.token_id %}{{ r.token[:14] }}<span class="pill">#{{ r.token_id }}</span>
+        {% else %}{{ r.token[:14] }}{% endif %}</td>
+    <td class="num">{{ r.amount_native | amount }}</td>
+    <td class="num">{{ r.usd_at_time | usd }}</td>
+    <td>{% for t in r.tags.split(',') if t %}<span class="pill">{{ t }}</span> {% endfor %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">no source-tagged transfers</td></tr>
+  {% endfor %}
+</table>
+<p class="muted"><a href="/transfers?source={{ row.source | urlencode }}">open in transfers with filters</a></p>
+
+{% endblock %}

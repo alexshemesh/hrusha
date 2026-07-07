@@ -46,6 +46,7 @@ log = logging.getLogger("hrusha.heal")
 
 CHAIN = "base"
 MAX_GAP_ROUNDS = 12  # missing txs healed per token before giving up
+MAX_TOKEN_DECIMALS = 77  # ~10**77 covers uint256; anything above is hostile
 
 
 @dataclass(frozen=True)
@@ -361,7 +362,12 @@ class W3ChainReader:
     def decimals(self, contract: str) -> int:
         if contract not in self._decimals:
             raw = self._w3.eth.call({"to": _checksum(contract), "data": "0x313ce567"})
-            self._decimals[contract] = int.from_bytes(raw, "big")
+            value = int.from_bytes(raw, "big")
+            if value > MAX_TOKEN_DECIMALS:
+                # raw eth_call is not ABI-bounded: a hostile token can answer
+                # with a huge exponent to grind Decimal math — refuse early
+                raise ValueError(f"token decimals {value} exceed {MAX_TOKEN_DECIMALS}")
+            self._decimals[contract] = value
         return self._decimals[contract]
 
     def transfer_logs(self, contract: str, block: int) -> list[RawTransferLog]:

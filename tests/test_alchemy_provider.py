@@ -69,6 +69,43 @@ def test_balances_parses_native_and_erc20():
     assert usdc.usd_price == Decimal("1.0")
 
 
+def test_balances_follow_portfolio_pagination():
+    # ~100 tokens per page and spam airdrops fill page 1 — the real USDC
+    # lived on page 2 in production; missing pagination silently dropped it
+    pages_requested = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        pages_requested.append(body.get("pageKey"))
+        if body.get("pageKey") is None:
+            first = portfolio_response()
+            first["data"]["pageKey"] = "page-2"
+            return httpx.Response(200, json=first)
+        assert body["pageKey"] == "page-2"
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "tokens": [
+                        {
+                            "address": MAIN,
+                            "network": "base-mainnet",
+                            "tokenAddress": COLD,  # stands in for the real-USDC contract
+                            "tokenBalance": hex(393_017_622),
+                            "tokenMetadata": {"symbol": "USDC", "decimals": 6},
+                            "tokenPrices": [{"currency": "usd", "value": "0.9998"}],
+                        }
+                    ]
+                }
+            },
+        )
+
+    balances = make_provider(handler).balances({"main": MAIN})
+    assert pages_requested == [None, "page-2"]
+    page2_usdc = next(b for b in balances if b.contract == COLD)
+    assert page2_usdc.amount == Decimal("393.017622")
+
+
 def test_balances_chunks_requests_by_two_addresses():
     request_counts = []
 
