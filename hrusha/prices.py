@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -152,7 +153,13 @@ class PriceResolver:
         with self._conn:
             self._conn.executemany(
                 "INSERT OR REPLACE INTO price_cache (token, day, usd) VALUES (?, ?, ?)",
-                [(token_key, _day(p["timestamp"]), float(p["price"])) for p in points],
+                # point timestamps jitter seconds AROUND midnight (23:59:54
+                # is common) — flooring would file them under the previous
+                # day and leave the intended day a false definitive miss
+                [
+                    (token_key, _day(_nearest_day_start(p["timestamp"])), float(p["price"]))
+                    for p in points
+                ],
             )
         log.info(
             "price history cached",
@@ -196,10 +203,81 @@ class PriceResolver:
             )
 
 
+@dataclass
+class RepriceStats:
+    repriced: int = 0
+    fees_repriced: int = 0
+    still_unpriced: int = 0
+    cache_misses_purged: int = 0
+
+
+def reprice_events(conn: sqlite3.Connection, prices: PriceResolver) -> RepriceStats:
+    """Backfill usd_at_time / gas_usd on events that were ingested unpriced.
+
+    Cached NULLs for the affected tokens are purged first: most unpriced
+    events date from the era when transient throttling poisoned the cache,
+    and a backfill that trusts those NULLs would fix nothing. Priced cache
+    rows are untouched, and misses that are still definitive (spam tokens
+    DefiLlama has never heard of) simply get re-cached as NULL.
+    NFT legs are skipped — they have no fungible price by design.
+    """
+    stats = RepriceStats()
+    with conn:
+        stats.cache_misses_purged = conn.execute(
+            """
+            DELETE FROM price_cache WHERE usd IS NULL AND token IN (
+                SELECT DISTINCT COALESCE(contract, token) FROM events
+                WHERE usd_at_time IS NULL AND token_id IS NULL
+                  AND kind IN ('transfer_in', 'transfer_out')
+                UNION SELECT 'ETH' WHERE EXISTS (
+                    SELECT 1 FROM events WHERE kind = 'gas_fee' AND gas_usd IS NULL
+                )
+            )
+            """
+        ).rowcount
+    transfer_rows = conn.execute(
+        """
+        SELECT id, COALESCE(contract, token), ts, amount_native FROM events
+        WHERE usd_at_time IS NULL AND token_id IS NULL
+          AND kind IN ('transfer_in', 'transfer_out')
+        ORDER BY COALESCE(contract, token), ts
+        """
+    ).fetchall()
+    with conn:
+        for event_id, token_key, ts, amount in transfer_rows:
+            price = prices.usd_price(token_key, ts)
+            if price is None:
+                stats.still_unpriced += 1
+                continue
+            conn.execute(
+                "UPDATE events SET usd_at_time = ? WHERE id = ?",
+                (float(Decimal(amount) * price), event_id),
+            )
+            stats.repriced += 1
+        for event_id, ts, amount in conn.execute(
+            "SELECT id, ts, amount_native FROM events WHERE kind = 'gas_fee' AND gas_usd IS NULL"
+        ).fetchall():
+            price = prices.usd_price(NATIVE_SYMBOL, ts)
+            if price is None:
+                stats.still_unpriced += 1
+                continue
+            usd = float(Decimal(amount) * price)
+            conn.execute(
+                "UPDATE events SET gas_usd = ?, usd_at_time = ? WHERE id = ?",
+                (usd, usd, event_id),
+            )
+            stats.fees_repriced += 1
+    return stats
+
+
 def _llama_coin(token_key: str) -> str:
     if token_key == NATIVE_SYMBOL:
         return DEFILLAMA_ETH_COIN
     return f"{DEFILLAMA_CHAIN}:{token_key}"
+
+
+def _nearest_day_start(ts: float) -> int:
+    return round(ts / SECONDS_PER_DAY) * SECONDS_PER_DAY
 
 
 def _day(ts: int) -> str:

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% set active = 'overview' %}
+{% block title %}overview{% endblock %}
+{% block content %}
+
+{% if not balances and not positions %}
+<div class="note">The ledger has no snapshots yet — press <b>refresh</b> to run the first sync.</div>
+{% else %}
+
+<p class="muted">
+  as of {{ as_of | when }} ·
+  epoch flips in {{ (epoch_flip_in_seconds // 3600) }}h {{ (epoch_flip_in_seconds % 3600) // 60 }}m
+  ({{ epoch_flip_at | when }})
+</p>
+{% if stale %}<div class="note warn">Snapshots are stale — press refresh for current numbers.</div>{% endif %}
+
+{% if strategies %}
+<h2>Profit by strategy (lifetime)</h2>
+<table>
+  <tr><th>strategy</th><th class="num">put in</th><th class="num">taken out</th>
+      <th class="num">income</th><th class="num">gas</th><th class="num">holding now</th>
+      <th class="num">profit</th><th class="num">unpriced</th></tr>
+  {% for s in strategies %}
+  {% set detail = '/strategy/' + (s.source | urlencode) %}
+  <tr>
+    <td><a href="{{ detail }}">{{ s.source }}</a></td>
+    <td class="num"><a href="{{ detail }}#flows">{{ s.deposited_usd | usd }}</a></td>
+    <td class="num"><a href="{{ detail }}#flows">{{ s.withdrawn_usd | usd }}</a></td>
+    <td class="num"><a href="{{ detail }}#epochs">{{ s.income_usd | usd }}</a></td>
+    <td class="num"><a href="{{ detail }}#flows">{{ s.gas_usd | usd }}</a></td>
+    <td class="num"><a href="{{ detail }}#holding">{{ s.position_usd | usd }}</a></td>
+    <td class="num"><a href="{{ detail }}"><b>{{ s.profit_usd | usd }}</b></a></td>
+    <td class="num">{{ s.unpriced_count or '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">profit = income + taken out + holding now − put in − gas, USD at event
+time; veNFT purchases and rebases count under aerodrome-voting; unpriced legs are
+counted, not valued</p>
+{% endif %}
+
+<h2 id="positions">Positions — {{ total_position_usd | usd }}</h2>
+<table>
+  <tr><th>source</th><th>token</th><th class="num">amount</th><th class="num">USD</th></tr>
+  {% for row in positions %}
+  <tr>
+    <td>{{ row.source or '' }}</td>
+    <td>{{ row.token }}</td>
+    <td class="num">{{ row.amount_native | amount }}</td>
+    <td class="num">{{ row.usd_at_time | usd }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Claimable — {{ total_claimable_usd | usd }}</h2>
+<table>
+  <tr><th>source</th><th>token</th><th class="num">amount</th><th class="num">USD</th></tr>
+  {% for row in claimables %}
+  <tr>
+    <td>{{ row.source or '' }}</td>
+    <td>{{ row.token[:20] }}</td>
+    <td class="num">{{ row.amount_native | amount }}</td>
+    <td class="num">{{ row.usd_at_time | usd }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Wallet balances — {{ total_balance_usd | usd }}</h2>
+<table>
+  <tr><th>wallet</th><th>token</th><th class="num">amount</th><th class="num">USD</th></tr>
+  {% for row in balances if (row.usd_at_time or 0) >= 0.01 %}
+  <tr>
+    <td>{{ wallet_labels.get(row.address, row.address[:8]) }}</td>
+    <td>{{ row.token[:20] }}</td>
+    <td class="num">{{ row.amount_native | amount }}</td>
+    <td class="num">{{ row.usd_at_time | usd }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">balances under $0.01 (dust, spam) are hidden; the CLI shows everything</p>
+
+{% endif %}
+{% endblock %}

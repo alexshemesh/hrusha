@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hrusha — {% block title %}{% endblock %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0 auto;
+         max-width: 72rem; padding: 0 1rem 3rem; }
+  nav { display: flex; gap: 1.2rem; align-items: baseline; padding: 0.8rem 0;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+  nav .brand { font-weight: 700; }
+  nav a { text-decoration: none; }
+  nav a.active { font-weight: 600; text-decoration: underline; }
+  nav form { margin-left: auto; }
+  h2 { margin: 1.4rem 0 0.4rem; font-size: 1.05rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 0.25rem 0.7rem 0.25rem 0; vertical-align: baseline;
+           border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  th { font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { opacity: 0.6; }
+  .note { padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0.6rem 0;
+          background: color-mix(in srgb, currentColor 8%, transparent); }
+  .warn { background: color-mix(in srgb, #c60 25%, transparent); }
+  .pill { font-size: 0.8em; padding: 0 0.4em; border-radius: 3px;
+          background: color-mix(in srgb, currentColor 12%, transparent); }
+  form.inline { display: inline; }
+  input[name="tag"] { width: 7em; font-size: 0.85em; }
+  button { cursor: pointer; }
+</style>
+</head>
+<body>
+<nav>
+  <span class="brand">hrusha</span>
+  <a href="/" {% if active == 'overview' %}class="active"{% endif %}>overview</a>
+  <a href="/income" {% if active == 'income' %}class="active"{% endif %}>income</a>
+  <a href="/transfers" {% if active == 'transfers' %}class="active"{% endif %}>transfers</a>
+  <form method="post" action="/refresh">
+    <button {% if sync_running %}disabled{% endif %}>
+      {% if sync_running %}syncing…{% else %}refresh{% endif %}
+    </button>
+  </form>
+</nav>
+{% if sync_outcome %}<div class="note">{{ sync_outcome }}</div>{% endif %}
+{% block content %}{% endblock %}
+</body>
+</html>

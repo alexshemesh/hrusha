@@ -44,6 +44,10 @@ WEI_PER_ETH = Decimal(10) ** NATIVE_DECIMALS
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 PORTFOLIO_MAX_ADDRESSES = 2
+# ~100 tokens per Portfolio page; spam airdrops push the real tokens onto
+# later pages (observed live: USDC on page 2 of 3), so pagination is not
+# optional. The cap only guards against a runaway pageKey loop.
+PORTFOLIO_PAGE_LIMIT = 25
 RECEIPT_BATCH_SIZE = 100
 TRANSFER_PAGE_LIMIT = 100  # safety cap: 100 pages * 1000 transfers per direction
 RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4, 8)  # free tier rate-limits routinely
@@ -72,11 +76,22 @@ class AlchemyProvider:
                 "withPrices": True,
                 "includeNativeTokens": True,
             }
-            body = self._post(url, payload, what="Alchemy Portfolio API")
-            for raw in body.get("data", {}).get("tokens", []):
-                parsed = _token_balance_from_raw(raw)
-                if parsed is not None:
-                    balances.append(parsed)
+            for _page in range(PORTFOLIO_PAGE_LIMIT):
+                body = self._post(url, payload, what="Alchemy Portfolio API")
+                data = body.get("data", {})
+                for raw in data.get("tokens", []):
+                    parsed = _token_balance_from_raw(raw)
+                    if parsed is not None:
+                        balances.append(parsed)
+                page_key = data.get("pageKey")
+                if not page_key:
+                    break
+                payload = {**payload, "pageKey": page_key}
+            else:
+                raise ProviderError(
+                    f"Alchemy Portfolio API exceeded {PORTFOLIO_PAGE_LIMIT} pages; "
+                    "refusing a runaway balance listing"
+                )
         return balances
 
     # -- transfers ----------------------------------------------------------

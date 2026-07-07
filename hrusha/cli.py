@@ -11,8 +11,10 @@ Commands (Phases 1-2):
   retag           re-run tag rules + epoch assignment over the whole ledger
   doctor          reconcile ledger net flows against live on-chain balances
   heal            repair the gaps doctor finds, from raw chain receipts
+  reprice         backfill USD values on events that were ingested unpriced
   rules export    back up tag rules + manual tags to ~/.hrusha/rules.yaml
   rules import    restore them into (a possibly rebuilt) ledger
+  serve           local web dashboard (binds 127.0.0.1 — no auth, keep it local)
 
 Exit codes: 0 ok, 2 config problem, 3 provider problem, 4 bad reference,
 5 doctor found discrepancies.
@@ -97,8 +99,12 @@ def run_command(args: argparse.Namespace, config: Config) -> int:
         return run_doctor(config)
     if args.command == "heal":
         return run_heal(config)
+    if args.command == "reprice":
+        return run_reprice(config)
     if args.command == "rules":
         return run_rules(config, action=args.action, path=args.path)
+    if args.command == "serve":
+        return run_serve(config, host=args.host, port=args.port)
     raise AssertionError(f"unhandled command: {args.command}")
 
 
@@ -157,6 +163,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     del heal  # no extra arguments
 
+    reprice = subparsers.add_parser("reprice", help="backfill USD values on unpriced ledger events")
+    del reprice  # no extra arguments
+
     rules = subparsers.add_parser("rules", help="back up / restore local tag rules and manual tags")
     rules.add_argument("action", choices=("export", "import"))
     rules.add_argument(
@@ -164,6 +173,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"YAML file (default {rules_io.DEFAULT_RULES_PATH}; keep it out of any repo)",
     )
+
+    serve = subparsers.add_parser("serve", help="run the local web dashboard")
+    serve.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="bind address (default 127.0.0.1; the app has no auth — do not expose it)",
+    )
+    serve.add_argument("--port", type=int, default=8787, help="port (default 8787)")
     return parser
 
 
@@ -402,6 +419,23 @@ def run_heal(config: Config) -> int:
     return EXIT_OK if not stats.unexplained else EXIT_RECONCILE_MISMATCH
 
 
+def run_reprice(config: Config) -> int:
+    from hrusha.prices import reprice_events
+
+    provider = AlchemyProvider(config.alchemy_api_key)
+    conn = open_ledger(config.db_path)
+    try:
+        stats = reprice_events(conn, PriceResolver(conn, provider))
+    finally:
+        conn.close()
+    print(
+        f"reprice: {stats.repriced} transfers + {stats.fees_repriced} fees valued, "
+        f"{stats.still_unpriced} still unpriced (no price exists), "
+        f"{stats.cache_misses_purged} cached misses retried"
+    )
+    return EXIT_OK
+
+
 def run_rules(config: Config, action: str, path: str | None) -> int:
     rules_path = Path(path).expanduser() if path else rules_io.DEFAULT_RULES_PATH.expanduser()
     conn = open_ledger(config.db_path)
@@ -429,6 +463,22 @@ def run_rules(config: Config, action: str, path: str | None) -> int:
             "ledger yet — run `hrusha sync`, then import again"
         )
     print("run `hrusha retag` to apply the imported rules")
+    return EXIT_OK
+
+
+def run_serve(config: Config, host: str, port: int) -> int:
+    import uvicorn  # deferred: only the dashboard needs an ASGI server
+
+    from hrusha.service.app import create_app
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "warning: binding beyond localhost — the dashboard has no auth; "
+            "anyone who can reach it sees your finances and can trigger syncs",
+            file=sys.stderr,
+        )
+    print(f"dashboard: http://{host}:{port}/")
+    uvicorn.run(create_app(config), host=host, port=port, log_config=None)
     return EXIT_OK
 
 

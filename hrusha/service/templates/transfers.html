@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% set active = 'transfers' %}
+{% block title %}transfers{% endblock %}
+{% block content %}
+
+<p class="muted">
+  gas, last 30 days: {{ fees.tx_count }} txs, ${{ '%.2f' | format(fees.total_usd) }}
+  {% if fees.unpriced_count %}({{ fees.unpriced_count }} unpriced){% endif %}
+</p>
+
+<form method="get" action="/transfers">
+  epoch <input name="epoch" value="{{ epoch or '' }}" size="10" placeholder="2026-07-02">
+  source <input name="source" value="{{ source or '' }}" size="14">
+  tag <input name="tag" value="{{ tag or '' }}" size="10">
+  rows <input name="limit" value="{{ limit }}" size="4">
+  <button>filter</button>
+  {% if epoch or source or tag %}<a href="/transfers">clear</a>{% endif %}
+</form>
+
+<table>
+  <tr><th>when (UTC)</th><th>dir</th><th>wallet</th><th>token</th>
+      <th class="num">amount</th><th class="num">USD</th><th>source</th><th>tags</th><th></th></tr>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.ts | when }}</td>
+    <td>{{ 'in' if row.kind == 'transfer_in' else 'out' }}</td>
+    <td>{{ wallet_labels.get(row.address, row.address[:8]) }}</td>
+    <td>{% if row.token_id %}{{ row.token[:14] }}<span class="pill">#{{ row.token_id }}</span>
+        {% else %}{{ row.token[:14] }}{% endif %}</td>
+    <td class="num">{{ row.amount_native | amount }}</td>
+    <td class="num">{{ row.usd_at_time | usd }}</td>
+    <td>{{ row.source or '' }}</td>
+    <td>{% for t in row.tags.split(',') if t %}<span class="pill">{{ t }}</span> {% endfor %}</td>
+    <td>
+      <form class="inline" method="post" action="/tag">
+        <input type="hidden" name="event_id" value="{{ row.id }}">
+        <input name="tag" placeholder="tag…">
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="9" class="muted">no transfers match — sync first, or clear filters</td></tr>
+  {% endfor %}
+</table>
+<p class="muted">type a tag and press Enter — manual tags always survive retags</p>
+
+{% endblock %}

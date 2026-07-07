@@ -15,6 +15,11 @@ dependencies = [
     # contract reads for protocol adapters (Aerodrome Sugar etc.); the
     # alternative is hand-rolled ABI encoding of nested dynamic structs
     "web3==7.16.0",
+    # Phase 5 dashboard: server-rendered pages, no SPA (docs/IMPLEMENTATION_PLAN.md)
+    "fastapi==0.139.0",
+    "uvicorn==0.50.2",
+    "jinja2==3.1.6",
+    "python-multipart==0.0.32",  # form posts (tag editing, refresh button)
 ]
 
 [project.optional-dependencies]
@@ -28,6 +33,9 @@ hrusha = "hrusha.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["hrusha*"]
+
+[tool.setuptools.package-data]
+hrusha = ["service/templates/*.html"]
 
 [tool.ruff]
 line-length = 100

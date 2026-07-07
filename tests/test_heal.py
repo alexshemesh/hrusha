@@ -2,10 +2,12 @@
 
 from decimal import Decimal
 
+import pytest
+
 from hrusha.ledger.ingest import ingest_transfers
 from hrusha.providers.interface import TxFee
 from hrusha.service.heal import RawTransferLog, heal
-from tests.conftest import MAIN, OUTSIDER, TX_2, FakeProvider, make_transfer
+from tests.conftest import MAIN, OUTSIDER, TOKEN_CONTRACT, TX_2, FakeProvider, make_transfer
 
 ADDRESSES = {"main": MAIN}
 DECIMALS = 6
@@ -218,6 +220,22 @@ def test_partially_indexed_tx_heals_only_the_missing_leg(ledger):
         (TX_2,),
     ).fetchall()
     assert legs == [("6", 0), ("2", 38)]  # no duplicate of the known 6-token leg
+
+
+def test_hostile_decimals_are_refused():
+    # raw eth_call is not ABI-bounded: a spam token can answer decimals()
+    # with 2**256-1 to grind Decimal exponentiation
+    from hrusha.service.heal import MAX_TOKEN_DECIMALS, W3ChainReader
+
+    class HostileW3:
+        class eth:
+            @staticmethod
+            def call(params, block=None):
+                return (2**256 - 1).to_bytes(32, "big")
+
+    reader = W3ChainReader(HostileW3())
+    with pytest.raises(ValueError, match=str(MAX_TOKEN_DECIMALS)):
+        reader.decimals(TOKEN_CONTRACT)
 
 
 def test_nft_gap_healed_by_count(ledger):

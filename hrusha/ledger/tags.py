@@ -122,6 +122,7 @@ def retag_all(conn: sqlite3.Connection, tracked_addresses: set[str]) -> TagStats
                     (source, *params),
                 )
                 stats.sources_set += cursor.rowcount
+        stats.tags_applied += _pair_router_vault_flows(conn)
         stats.sources_set += _inherit_gas_source(conn)
         stats.tags_applied += _tag_swaps(conn)
         stats.tags_applied += _tag_reinvests(conn)
@@ -242,6 +243,45 @@ def _inherit_gas_source(conn: sqlite3.Connection) -> int:
         """
     )
     return cursor.rowcount
+
+
+def _pair_router_vault_flows(conn: sqlite3.Connection) -> int:
+    """Vault flows routed through a bundler/router contract: the asset leg's
+    counterparty is the router, not the vault, so counterparty rules miss it —
+    but the share mint/burn in the SAME tx is already tagged and sourced.
+    Pair them: the sibling asset leg inherits the deposit/withdraw tag and the
+    source, so strategy accounting sees the money, not just the shares."""
+    applied = 0
+    for asset_kind, share_kind, tag in (
+        ("transfer_out", "transfer_in", DEPOSIT_TAG),  # deposit: asset out, shares minted
+        ("transfer_in", "transfer_out", WITHDRAW_TAG),  # withdraw: asset in, shares burned
+    ):
+        pair_where = f"""
+            events.kind = '{asset_kind}' AND EXISTS (
+                SELECT 1 FROM events share
+                JOIN tags st ON st.event_id = share.id AND st.tag = '{tag}'
+                WHERE share.tx_hash = events.tx_hash AND share.address = events.address
+                  AND share.kind = '{share_kind}' AND share.source IS NOT NULL
+                  AND COALESCE(share.contract, '') != COALESCE(events.contract, '')
+            )
+        """  # noqa: S608 — every interpolation is a module constant above
+        cursor = conn.execute(
+            f"INSERT OR IGNORE INTO tags (event_id, tag, origin)"  # noqa: S608
+            f" SELECT id, '{tag}', 'rule' FROM events WHERE {pair_where}"
+        )
+        applied += cursor.rowcount
+        conn.execute(
+            f"""
+            UPDATE events SET source = (
+                SELECT share.source FROM events share
+                JOIN tags st ON st.event_id = share.id AND st.tag = '{tag}'
+                WHERE share.tx_hash = events.tx_hash AND share.address = events.address
+                  AND share.kind = '{share_kind}' AND share.source IS NOT NULL
+                LIMIT 1
+            ) WHERE source IS NULL AND {pair_where}
+            """  # noqa: S608 — every interpolation is a module constant above
+        )
+    return applied
 
 
 def _tag_swaps(conn: sqlite3.Connection) -> int:

@@ -6,7 +6,7 @@ from hrusha.prices import PROVIDER_FAILURE_LIMIT, PriceResolver
 from hrusha.providers.interface import ProviderError
 from tests.conftest import TOKEN_CONTRACT
 
-TS = 1_750_000_000
+TS = 1_749_945_600  # 00:00 UTC: real period=1d chart points sit on day boundaries
 DAY_SECONDS = 86_400
 
 
@@ -142,11 +142,12 @@ def test_todays_missing_chart_point_is_not_a_definitive_miss(ledger):
     import time as _time
 
     now = int(_time.time())
+    yesterday_point = now - now % DAY_SECONDS - DAY_SECONDS  # a real 1d boundary point
     coin = f"base:{TOKEN_CONTRACT}"
     # chart knows yesterday but not today (DefiLlama's 1d point can lag)
     provider = CountingProvider(Decimal("1.25"))
     resolver = PriceResolver(
-        ledger, provider, http=llama_http(chart_response(coin, {now - DAY_SECONDS: 1.0}))
+        ledger, provider, http=llama_http(chart_response(coin, {yesterday_point: 1.0}))
     )
     assert resolver.usd_price(TOKEN_CONTRACT, now) == Decimal("1.25")  # provider fallback
     assert provider.calls == 1
@@ -154,7 +155,7 @@ def test_todays_missing_chart_point_is_not_a_definitive_miss(ledger):
     # and if the provider also fails, nothing is cached for today
     failing = CountingProvider(None, error=ProviderError("HTTP 429"))
     resolver2 = PriceResolver(
-        ledger, failing, http=llama_http(chart_response(coin, {now - DAY_SECONDS: 1.0}))
+        ledger, failing, http=llama_http(chart_response(coin, {yesterday_point: 1.0}))
     )
     ledger.execute("DELETE FROM price_cache")
     assert resolver2.usd_price(TOKEN_CONTRACT, now) is None
@@ -183,3 +184,94 @@ def test_chart_refetched_when_an_earlier_day_is_requested(ledger):
     assert resolver.usd_price(TOKEN_CONTRACT, TS - 10 * DAY_SECONDS) == Decimal("5.0")
     assert len(starts_seen) == 2
     assert starts_seen[1] < starts_seen[0]
+
+
+# -- reprice backfill ---------------------------------------------------------
+
+
+def test_reprice_fills_poisoned_events_and_purges_cached_misses(ledger):
+    from hrusha.ledger.ingest import ingest_transfers
+    from hrusha.prices import reprice_events
+    from tests.conftest import make_transfer
+
+    # the poisoning era: event stored unpriced, miss cached as NULL
+    ingest_transfers(
+        ledger,
+        [make_transfer(ts=TS, amount=Decimal("100"))],
+        tracked_addresses=set(),
+        price_fn=lambda token, ts: None,
+    )
+    with ledger:
+        ledger.execute(
+            "INSERT INTO price_cache (token, day, usd) VALUES (?, '2025-06-15', NULL)",
+            (TOKEN_CONTRACT,),
+        )
+        ledger.execute(
+            "INSERT INTO events (ts, chain, tx_hash, log_index, block, kind, token,"
+            " amount_native, address) VALUES (?, 'base', ?, -1, 1, 'gas_fee', 'ETH',"
+            " '0.002', ?)",
+            (TS, "0x" + "9" * 64, "0x" + "1" * 40),
+        )
+
+    coin = f"base:{TOKEN_CONTRACT}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = (
+            chart_response(coin, {TS: 2.5})
+            if coin in str(request.url)
+            else chart_response("coingecko:ethereum", {TS: 3000.0})
+        )
+        return httpx.Response(200, json=payload)
+
+    resolver = PriceResolver(
+        ledger, CountingProvider(None), http=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    stats = reprice_events(ledger, resolver)
+
+    assert stats.cache_misses_purged == 1  # the poisoned NULL was retried
+    assert stats.repriced == 1
+    assert stats.fees_repriced == 1
+    usd, gas = ledger.execute("SELECT MAX(usd_at_time), MAX(gas_usd) FROM events").fetchone()
+    assert usd == 250.0  # 100 * 2.5
+    assert gas == 6.0  # 0.002 * 3000
+
+
+def test_reprice_leaves_definitive_misses_and_nfts_alone(ledger):
+    from hrusha.ledger.ingest import ingest_transfers
+    from hrusha.prices import reprice_events
+    from tests.conftest import make_transfer
+
+    ingest_transfers(
+        ledger,
+        [
+            make_transfer(ts=TS, amount=Decimal("5")),  # spam: DefiLlama unknown
+            make_transfer(ts=TS, log_index=8, token_id="7", amount=Decimal(1)),
+        ],
+        tracked_addresses=set(),
+        price_fn=lambda token, ts: None,
+    )
+    resolver = PriceResolver(ledger, CountingProvider(None), http=llama_unknown_token_http())
+    stats = reprice_events(ledger, resolver)
+    assert stats.repriced == 0
+    assert stats.still_unpriced == 1  # the NFT leg is not even counted
+    assert ledger.execute(
+        "SELECT COUNT(*) FROM events WHERE usd_at_time IS NOT NULL"
+    ).fetchone() == (0,)
+
+
+def test_chart_points_jittered_before_midnight_land_on_the_intended_day(ledger):
+    # DefiLlama really returns e.g. 23:59:54 for a midnight point; flooring
+    # filed it under the previous day and poisoned the intended day as a miss
+    coin = f"base:{TOKEN_CONTRACT}"
+    day_start = TS - TS % DAY_SECONDS
+    provider = CountingProvider(None)
+    resolver = PriceResolver(
+        ledger,
+        provider,
+        http=llama_http(chart_response(coin, {day_start - 6: 1.25})),  # 23:59:54
+    )
+    assert resolver.usd_price(TOKEN_CONTRACT, day_start + 3600) == Decimal("1.25")
+    cached = ledger.execute(
+        "SELECT usd FROM price_cache WHERE token = ?", (TOKEN_CONTRACT,)
+    ).fetchall()
+    assert all(usd == 1.25 for (usd,) in cached)  # no NULL poisoning

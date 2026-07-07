@@ -105,6 +105,9 @@ def discover_vault_rules(
     rules_added = 0
     for address in addresses:
         for position in adapter.positions(address):
+            # ERC-4626 twice over: the share legs (contract = vault) AND the
+            # asset legs (counterparty = vault) — the asset legs carry the
+            # money, so without them a strategy report sees $0 deposited
             added = ensure_rule(
                 conn,
                 VAULT_RULE_PRIORITY,
@@ -116,6 +119,20 @@ def discover_vault_rules(
                 conn,
                 VAULT_RULE_PRIORITY,
                 {"contract": position.vault, "direction": "out"},
+                [WITHDRAW_TAG],
+                SOURCE_MORPHO,
+            )
+            added |= ensure_rule(
+                conn,
+                VAULT_RULE_PRIORITY,
+                {"counterparty": position.vault, "direction": "out"},
+                [DEPOSIT_TAG],
+                SOURCE_MORPHO,
+            )
+            added |= ensure_rule(
+                conn,
+                VAULT_RULE_PRIORITY,
+                {"counterparty": position.vault, "direction": "in"},
                 [WITHDRAW_TAG],
                 SOURCE_MORPHO,
             )
