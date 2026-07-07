@@ -1,7 +1,7 @@
 ---
 date: 2026-07-07T15:56
 type: feature
-status: proposed
+status: merged
 trigger: dependency
 touches:
   - hrusha/service/vote_scout.py
@@ -10,8 +10,8 @@ touches:
 related:
   - 2026-07-07-1126-vote-scout-probe.md
 supersedes: null
-commit: null
-pr: null
+commit: 140e11d
+pr: https://github.com/alexshemesh/hrusha/pull/12
 ---
 
 # Vote scout: sustainability + bribe-quality + token-safety gates
