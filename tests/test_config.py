@@ -176,3 +176,15 @@ def test_vote_scout_sustainability_and_safety_settings(tmp_path):
     bad = VALID_CONFIG + "\nvote_scout:\n  token_safety: maybe\n"
     with pytest.raises(ConfigError):
         load_config(write_config(tmp_path, bad))
+
+
+def test_db_path_env_override_wins_over_config(tmp_path, monkeypatch):
+    # the Docker image sets HRUSHA_DB_PATH=/data/hrusha.db so one config.yaml
+    # works bare-metal AND mounted — the env var must beat the file
+    content = VALID_CONFIG + '\ndb_path: "/somewhere/else.db"\n'
+    monkeypatch.setenv("HRUSHA_DB_PATH", str(tmp_path / "data" / "override.db"))
+    config = load_config(write_config(tmp_path, content))
+    assert config.db_path == tmp_path / "data" / "override.db"
+    monkeypatch.setenv("HRUSHA_DB_PATH", "   ")
+    with pytest.raises(ConfigError):
+        load_config(write_config(tmp_path, content))

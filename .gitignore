@@ -140,3 +140,7 @@ config.yaml
 *service-account*.json
 /data/
 .hrusha/
+
+# deployment runtime artifacts (created by deploy/deploy.sh)
+deploy/data/
+deploy/logs/

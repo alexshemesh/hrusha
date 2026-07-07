@@ -1,5 +1,6 @@
 # Design Log Index
 
+- 2026-07-07-1642 — `phase6-docker-deployment` — compose + deploy scripts + mounted config/db/logs + AI ops runbook skill (status: proposed)
 - 2026-07-07-1556 — `scout-sustainability-safety-gates` — emissions-subsidy, one-off/self-bribe, GoPlus token-safety gates (status: proposed)
 - 2026-07-07-1536 — `strategy-yield-price-effect` — profit decomposed into in-kind yield + price effect (income/spend semantics resolved) (status: merged)
 - 2026-07-07-1126 — `vote-scout-probe` — dilution-aware Aerodrome vote suggestions spike (RewardsSugar epochs + risk flags) (status: merged)

@@ -1,0 +1,37 @@
+# Local-build deployment: repo checkout + `deploy/deploy.sh` on any host.
+# Config, ledger and logs live OUTSIDE the container (bind mounts); the
+# image contains code only. All knobs are env vars with safe defaults:
+#
+#   HRUSHA_BIND         host address to publish on (default 127.0.0.1 —
+#                       the dashboard has NO auth; expose on the LAN only
+#                       deliberately: HRUSHA_BIND=0.0.0.0 deploy/deploy.sh)
+#   HRUSHA_PORT         host port (default 8787)
+#   HRUSHA_CONFIG_FILE  config.yaml on the host (default ~/.hrusha/config.yaml)
+#   HRUSHA_DATA_DIR     ledger + backups dir (default ./deploy/data)
+#   HRUSHA_LOGS_DIR     JSON log mirror dir (default ./deploy/logs)
+#   HRUSHA_UID/GID      user the container runs as — deploy.sh sets these to
+#                       the invoking user so the mounted dirs stay writable
+services:
+  hrusha:
+    build: .
+    image: hrusha:local
+    user: "${HRUSHA_UID:-10001}:${HRUSHA_GID:-10001}"
+    ports:
+      - "${HRUSHA_BIND:-127.0.0.1}:${HRUSHA_PORT:-8787}:8787"
+    volumes:
+      - "${HRUSHA_CONFIG_FILE:-~/.hrusha/config.yaml}:/config/config.yaml:ro"
+      - "${HRUSHA_DATA_DIR:-./deploy/data}:/data"
+      - "${HRUSHA_LOGS_DIR:-./deploy/logs}:/logs"
+    environment:
+      HRUSHA_LOG_DIR: /logs
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=5)"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

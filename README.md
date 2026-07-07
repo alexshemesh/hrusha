@@ -87,11 +87,22 @@ manual tags always survive re-tagging. Protocol adapters and the web
 dashboard arrive with Phases 3–5 of
 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
 
-Via Docker:
+# Deployment (Docker)
+One command per lifecycle step, built locally from the checkout — see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full runbook (LAN
+exposure, backup/restore, troubleshooting). Bare-metal `hrusha serve`
+stays fully supported; the container is just packaging.
 ```bash
-docker build -t hrusha .
-docker run --rm -v ~/.hrusha:/config:ro hrusha sync --dry-run
+./deploy/deploy.sh    # build + start; dashboard on http://127.0.0.1:8787
+./deploy/status.sh    # health, ledger size, recent errors
+./deploy/backup.sh    # consistent SQLite backup (keeps newest 14)
+./deploy/upgrade.sh   # backup -> git pull -> rebuild -> health -> doctor
 ```
+Config mounts read-only from `~/.hrusha/config.yaml`; the ledger and
+JSON logs live in `deploy/data/` and `deploy/logs/` on the host. An
+AI-operations runbook ships in the repo at
+`.claude/skills/hrusha-ops/` so a Claude session on any machine can
+deploy and maintain the service.
 
 # Tests & lint
 ```bash

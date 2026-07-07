@@ -17,6 +17,9 @@ import yaml
 DEFAULT_CONFIG_PATH = Path("~/.hrusha/config.yaml")
 DEFAULT_DB_PATH = Path("~/.hrusha/hrusha.db")
 CONFIG_PATH_ENV_VAR = "HRUSHA_CONFIG"
+# overrides db_path from the config file: the Docker image sets it to
+# /data/hrusha.db so ONE config.yaml works both bare-metal and mounted
+DB_PATH_ENV_VAR = "HRUSHA_DB_PATH"
 
 _ADDRESS_PATTERN = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
@@ -185,6 +188,11 @@ def _scout_filters(raw: dict) -> ScoutFilters:
 
 
 def _db_path(raw: dict) -> Path:
+    override = os.environ.get(DB_PATH_ENV_VAR)
+    if override is not None:
+        if not override.strip():
+            raise ConfigError(f"{DB_PATH_ENV_VAR} is set but empty")
+        return Path(override).expanduser()
     value = raw.get("db_path", str(DEFAULT_DB_PATH))
     if not isinstance(value, str) or not value.strip():
         raise ConfigError("config key db_path must be a non-empty path string")
