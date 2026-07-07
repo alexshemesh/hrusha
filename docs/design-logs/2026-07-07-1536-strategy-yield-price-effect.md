@@ -1,7 +1,7 @@
 ---
 date: 2026-07-07T15:36
 type: feature
-status: proposed
+status: merged
 trigger: tradeoff
 touches:
   - hrusha/ledger/reports.py
@@ -9,8 +9,8 @@ touches:
 related:
   - 2026-07-06-1620-phase5a-fastapi-dashboard.md
 supersedes: null
-commit: null
-pr: null
+commit: d1c8c91
+pr: https://github.com/alexshemesh/hrusha/pull/11
 ---
 
 # Strategy view: decompose profit into in-kind yield and price effect

@@ -41,6 +41,14 @@ class ScoutFilters:
     # 0 disables the gate; when set, pools whose YOUNGEST pair token was first
     # priced by DefiLlama fewer than this many days ago are flagged YOUNG-TOKEN
     min_token_age_days: float = 0.0
+    # 0 disables; pools whose accrued fees are below this fraction of the AERO
+    # emitted to their gauge (same window) get an INFORMATIONAL note
+    # (EMISSIONS-SUBSIDIZED, never blocks): vAPR rented, not earned
+    min_fees_per_emission: float = 0.1
+    # GoPlus mechanical token checks (honeypot, tax walls, pausable transfers)
+    # on non-major pair + bribe tokens; the /votes page warns if the check
+    # was enabled but unreachable
+    token_safety: bool = True
 
 
 @dataclass(frozen=True)
@@ -136,6 +144,8 @@ def _scout_filters(raw: dict) -> ScoutFilters:
         "min_fee_share",
         "min_history",
         "min_token_age_days",
+        "min_fees_per_emission",
+        "token_safety",
     }
     for key in block:
         if key not in known:
@@ -152,6 +162,9 @@ def _scout_filters(raw: dict) -> ScoutFilters:
     require_major = block.get("require_major_pair", defaults.require_major_pair)
     if not isinstance(require_major, bool):
         raise ConfigError("vote_scout.require_major_pair must be true or false")
+    token_safety = block.get("token_safety", defaults.token_safety)
+    if not isinstance(token_safety, bool):
+        raise ConfigError("vote_scout.token_safety must be true or false")
     extra = block.get("extra_major_symbols", [])
     if not isinstance(extra, list) or not all(isinstance(s, str) and s.strip() for s in extra):
         raise ConfigError("vote_scout.extra_major_symbols must be a list of token symbols")
@@ -166,6 +179,8 @@ def _scout_filters(raw: dict) -> ScoutFilters:
         min_fee_share=number("min_fee_share", defaults.min_fee_share, upper=1.0),
         min_history=min_history,
         min_token_age_days=number("min_token_age_days", defaults.min_token_age_days),
+        min_fees_per_emission=number("min_fees_per_emission", defaults.min_fees_per_emission),
+        token_safety=token_safety,
     )
 
 

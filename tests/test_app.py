@@ -385,3 +385,40 @@ def test_api_docs_are_disabled(config):
     client = make_client(config)
     assert client.get("/docs").status_code == 404
     assert client.get("/openapi.json").status_code == 404
+
+
+def test_votes_page_renders_informational_notes_on_suggested_pools(config):
+    from hrusha.service.vote_scout import RawPool, rank
+
+    def scout_with_note(cfg):
+        result = make_scout_result()
+        raws = [
+            RawPool(
+                lp="0x" + "d" * 40,
+                # majors pair so the default EXOTIC-PAIR gate doesn't hide it:
+                # this test is about the NOTE rendering on a suggested pool
+                name="vAMM-WETH/USDC",
+                symbols=("WETH", "USDC"),
+                votes=2_000_000.0,
+                fees_usd=9_000.0,
+                incentives_usd=0.0,
+                blind_share=0.0,
+                tvl_usd=5_000_000.0,
+                final_votes=(4_000_000.0, 4_500_000.0, 4_200_000.0),
+                self_bribe_share=1.0,
+            )
+        ]
+        result.pools = rank(raws, 0.5, 10_000.0)
+        return result
+
+    client = make_client(config, scout_runner=scout_with_note)
+    client.post("/votes/scan", follow_redirects=False)
+    for _ in range(100):
+        body = client.get("/votes").text
+        if "vAMM-WETH/USDC" in body:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("scan result never appeared")
+    suggested_section = body.split("All candidates")[0]
+    assert "SELF-BRIBED(100%)" in suggested_section  # visible on a SUGGESTED pool

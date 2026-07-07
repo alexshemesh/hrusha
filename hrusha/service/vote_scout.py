@@ -61,6 +61,29 @@ HTTP_TIMEOUT_SECONDS = 30.0
 MIN_PRICE_CONFIDENCE = 0.8  # DefiLlama confidence below this = sketchy pricing
 STRESS_VOTE_FACTOR = 1.15  # stress case: historical max final votes, plus this
 
+# bribe-quality gates (constants, not config: these are boolean judgments,
+# not thresholds the operator would tune per docs/examples/pool_filter_lab.py)
+MIN_INCENTIVE_EPOCHS = 2  # a real bribe program shows up in the recent history...
+INCENTIVE_MATTERS_SHARE = 0.3  # ...but only worth flagging when bribes drive the reward
+SELF_BRIBE_MAX_SHARE = 0.5  # most incentive USD paid in the pool's own exotic token
+
+# GoPlus token security (docs/examples/goplus_probe.py): free, keyless,
+# covers Base. Queried ONE TOKEN PER CALL — the batch endpoint silently
+# drops results (observed live). Only mechanical risks gate; mintable,
+# proxy, holder concentration all trip on legit majors (AERO, USDC)
+GOPLUS_URL = "https://api.gopluslabs.io/api/v1/token_security/8453"
+GOPLUS_HARD_RISKS = (
+    "is_honeypot",
+    "cannot_sell_all",
+    "transfer_pausable",
+    "is_blacklisted",
+    "owner_change_balance",
+    "selfdestruct",
+    "trading_cooldown",
+    "hidden_owner",
+)
+GOPLUS_MAX_TAX = 0.05  # buy/sell tax above 5% is a toll booth
+
 # symbol-level "established pair" preference (NOT a security boundary —
 # symbols are spoofable; the TVL floor and DefiLlama-priced gates are what
 # keep fakes out, this only expresses the operator's taste for majors)
@@ -225,6 +248,13 @@ class RawPool:
     # days since DefiLlama first priced the YOUNGEST pair token; None = unknown
     # (never priced — treated as age 0 when the age gate is enabled)
     min_token_age_days: float | None = None
+    # AERO emitted to the gauge over the SAME accrual window as fees_usd
+    # (epoch start -> now), so fees/emissions compares like with like
+    emissions_usd: float = 0.0
+    incentive_epochs: int = 0  # completed history epochs that had any bribes
+    # share of current incentive USD paid in the pool's own non-major tokens
+    self_bribe_share: float = 0.0
+    token_risks: tuple[str, ...] = ()  # GoPlus hard risks, e.g. "REI:sell_tax=8%"
 
 
 @dataclass
@@ -235,10 +265,14 @@ class PoolScore:
     stress_usd_per_1k: float
     vapr_pct: float
     fee_share: float
-    flags: tuple[str, ...]
+    flags: tuple[str, ...]  # blocking: any flag keeps the pool out of suggested
     my_usd_per_epoch: float
     my_epoch_pct: float
     my_apr_pct: float
+    # informational (operator call 2026-07-07): shown in the table, never
+    # block — EMISSIONS-SUBSIDIZED and SELF-BRIBED are "know what you're
+    # being paid in", not "do not touch"; unproven by back-test as blockers
+    notes: tuple[str, ...] = ()
 
     @property
     def suggested(self) -> bool:
@@ -267,6 +301,9 @@ class ScoutResult:
     my_value_usd: float
     venfts: list[VeNft] = field(default_factory=list)
     pools: list[PoolScore] = field(default_factory=list)  # ranked, best first
+    # False when the GoPlus check was enabled but unreachable — the page
+    # must say so; silently unchecked would read as "all tokens clean"
+    token_safety_checked: bool = True
 
     @property
     def suggested(self) -> list[PoolScore]:
@@ -322,6 +359,24 @@ def score_pool(
         age = raw.min_token_age_days or 0.0
         if age < filters.min_token_age_days:
             flags.append(f"YOUNG-TOKEN({age:.0f}d)")
+    incentives_share = raw.incentives_usd / reward_usd if reward_usd else 0.0
+    if (
+        incentives_share > INCENTIVE_MATTERS_SHARE
+        and raw.final_votes
+        and raw.incentive_epochs < MIN_INCENTIVE_EPOCHS
+    ):
+        # bribes drive this reward but barely existed before: pump, not program
+        flags.append(f"ONE-OFF-BRIBE({raw.incentive_epochs}/{len(raw.final_votes)}ep)")
+    if raw.token_risks:
+        flags.append(f"TOKEN-RISK({', '.join(raw.token_risks[:3])})")
+
+    notes = []  # informational: shown, never blocks the suggested list
+    if filters.min_fees_per_emission > 0 and raw.emissions_usd > 0:
+        efficiency = raw.fees_usd / raw.emissions_usd
+        if efficiency < filters.min_fees_per_emission:
+            notes.append(f"EMISSIONS-SUBSIDIZED(fees/emit={efficiency:.2f})")
+    if raw.self_bribe_share > SELF_BRIBE_MAX_SHARE:
+        notes.append(f"SELF-BRIBED({raw.self_bribe_share:.0%})")
 
     my_usd = reward_usd * my_power / (projected + my_power) if projected + my_power else 0.0
     my_value_usd = my_power * aero_price
@@ -341,6 +396,7 @@ def score_pool(
         my_usd_per_epoch=my_usd,
         my_epoch_pct=my_epoch_pct,
         my_apr_pct=my_epoch_pct * SECONDS_PER_YEAR / SECONDS_PER_WEEK,
+        notes=tuple(notes),
     )
 
 
@@ -383,13 +439,23 @@ def scan(config: Config) -> ScoutResult:
     seen: set[str] = set()  # defensive: window semantics must never yield a pool twice
     for offset in range(0, pool_count, POOL_INDEXES_PER_CALL):
         rows = rewards_sugar.functions.epochsLatest(POOL_INDEXES_PER_CALL, offset).call()
-        for ts, lp, votes, _emissions, bribes, fees in rows:
+        for ts, lp, votes, emissions, bribes, fees in rows:
             if ts != epoch_start:  # decode sanity: running epoch must be Thursday-anchored
                 raise RuntimeError(f"LpEpoch decode looks wrong: ts={ts} != {epoch_start}")
             if lp.lower() in seen:
                 continue
             seen.add(lp.lower())
-            pools.append({"lp": lp, "votes": votes / WEI, "bribes": bribes, "fees": fees})
+            pools.append(
+                {
+                    "lp": lp,
+                    "votes": votes / WEI,
+                    "bribes": bribes,
+                    "fees": fees,
+                    # AERO/second to the gauge; scaled to the fees accrual
+                    # window below so fees/emissions compares like with like
+                    "emissions_rate": emissions / WEI,
+                }
+            )
 
     reward_tokens = {token.lower() for p in pools for token, _ in [*p["bribes"], *p["fees"]]}
     reward_tokens.add(AERO_CONTRACT)
@@ -456,6 +522,15 @@ def scan(config: Config) -> ScoutResult:
             balance = erc20.functions.balanceOf(lp).call() / 10**decimals
             tvl += balance * prices.get(token.lower(), (0.0, 0.0))[0]
         history = rewards_sugar.functions.epochsByAddress(HISTORY_EPOCHS + 1, 0, lp).call()
+        completed = [row for row in history if row[0] < epoch_start][:HISTORY_EPOCHS]
+        pair = pair_tokens[p["lp"]]
+        incentive_usd_total, self_bribe_usd = 0.0, 0.0
+        for token, amount in p["bribes"]:
+            token = token.lower()  # noqa: PLW2901
+            usd = amount / 10 ** token_decimals.get(token, 18) * prices.get(token, (0.0, 0.0))[0]
+            incentive_usd_total += usd
+            if token in pair and describe(token)[0] not in MAJOR_SYMBOLS:
+                self_bribe_usd += usd  # bribing voters with the pool's own exotic token
         raws.append(
             RawPool(
                 lp=p["lp"],
@@ -467,10 +542,13 @@ def scan(config: Config) -> ScoutResult:
                 blind_share=p["blind_share"],
                 tvl_usd=tvl,
                 final_votes=tuple(
-                    votes / WEI
-                    for ts, _lp, votes, _em, _bribes, _fees in history
-                    if ts < epoch_start  # completed epochs only: those votes are FINAL
-                )[:HISTORY_EPOCHS],
+                    votes / WEI for _ts, _lp, votes, _em, _bribes, _fees in completed
+                ),
+                emissions_usd=p["emissions_rate"] * (now - epoch_start) * aero_price,
+                incentive_epochs=sum(1 for row in completed if row[4]),  # row[4] = bribes
+                self_bribe_share=(
+                    self_bribe_usd / incentive_usd_total if incentive_usd_total else 0.0
+                ),
             )
         )
 
@@ -480,6 +558,18 @@ def scan(config: Config) -> ScoutResult:
         pair = pair_tokens.get(raw.lp)
         if pair and all(t in first_seen for t in pair):
             raw.min_token_age_days = min((now - first_seen[t]) / 86400 for t in pair)
+
+    token_safety_checked = True
+    if config.vote_scout.token_safety:
+        bribe_tokens = {t.lower() for p in candidates for t, _ in p["bribes"]}
+        checked = {t for t in {*bribe_tokens, *(t for pr in pair_tokens.values() for t in pr)}
+                   if token_meta.get(t, ("?",))[0] not in MAJOR_SYMBOLS}  # fmt: skip
+        risks, token_safety_checked = _fetch_token_risks(http, sorted(checked), token_meta)
+        for p, raw in zip(candidates, raws, strict=False):
+            exposed = {*pair_tokens.get(raw.lp, ()), *(t.lower() for t, _ in p["bribes"])}
+            raw.token_risks = tuple(
+                risk for token in sorted(exposed) for risk in risks.get(token, ())
+            )
 
     venfts = _fetch_venfts(w3, http, config, epoch_start)
     my_power = sum(nft.power for nft in venfts)
@@ -492,7 +582,43 @@ def scan(config: Config) -> ScoutResult:
         my_value_usd=my_power * aero_price,
         venfts=venfts,
         pools=rank(raws, aero_price, my_power, config.vote_scout),
+        token_safety_checked=token_safety_checked,
     )
+
+
+def _fetch_token_risks(
+    http: httpx.Client, tokens: list[str], token_meta: dict
+) -> tuple[dict[str, tuple[str, ...]], bool]:
+    """token -> GoPlus hard-risk strings; bool = the check actually ran.
+
+    One token per call — GoPlus's batch endpoint silently drops results
+    (docs/examples/goplus_probe.py). Positive findings only: a token
+    GoPlus has never scanned is unknown, and unknown is not a risk flag
+    (age/TVL/pricing gates carry that weight)."""
+    risks: dict[str, tuple[str, ...]] = {}
+    failures = 0
+    for token in tokens:
+        try:
+            response = http.get(GOPLUS_URL, params={"contract_addresses": token})
+            response.raise_for_status()
+            data = (response.json().get("result") or {}).get(token)
+        except (httpx.HTTPError, ValueError):
+            failures += 1
+            continue
+        if not data:
+            continue
+        found = [field_name for field_name in GOPLUS_HARD_RISKS if data.get(field_name) == "1"]
+        for side in ("buy_tax", "sell_tax"):
+            raw_tax = data.get(side)
+            if raw_tax not in (None, "") and float(raw_tax) > GOPLUS_MAX_TAX:
+                found.append(f"{side}={float(raw_tax):.0%}")
+        if found:
+            symbol = token_meta.get(token, (token[:10],))[0]
+            risks[token] = tuple(f"{symbol}:{risk}" for risk in found)
+    if failures:
+        log.warning("GoPlus token check failures", extra={"failed": failures, "of": len(tokens)})
+    all_failed = bool(tokens) and failures == len(tokens)
+    return risks, not all_failed
 
 
 def _fetch_prices(http: httpx.Client, tokens: set[str]) -> dict[str, tuple[float, float]]:

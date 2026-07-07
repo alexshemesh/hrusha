@@ -1,7 +1,7 @@
 ---
 date: 2026-07-07T11:26
 type: feature
-status: proposed
+status: merged
 trigger: new-pattern
 touches:
   - docs/examples/vote_scout_probe.py
@@ -12,8 +12,8 @@ touches:
 related:
   - 2026-07-06-1620-phase5a-fastapi-dashboard.md
 supersedes: null
-commit: null
-pr: null
+commit: d1c8c91
+pr: https://github.com/alexshemesh/hrusha/pull/11
 ---
 
 # Vote scout: dilution-aware Aerodrome voting-pool suggestions (spike)

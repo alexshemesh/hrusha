@@ -1,7 +1,7 @@
 ---
 date: 2026-07-06T16:20
 type: feature
-status: proposed
+status: merged
 trigger: dependency
 touches:
   - hrusha/service/app.py
@@ -12,8 +12,8 @@ touches:
 related:
   - 2026-07-06-1534-ledger-hardening-nft-doctor-rules-backup.md
 supersedes: null
-commit: null
-pr: null
+commit: 0f6b9ca
+pr: https://github.com/alexshemesh/hrusha/pull/10
 ---
 
 # Phase 5a: FastAPI dashboard — server-rendered pages over the ledger

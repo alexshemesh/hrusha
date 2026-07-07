@@ -1,7 +1,7 @@
 ---
 date: 2026-07-06T15:34
 type: architecture
-status: proposed
+status: merged
 trigger: cross-cutting
 touches:
   - hrusha/providers/blockscout.py
@@ -16,8 +16,8 @@ touches:
 related:
   - 2026-07-06-1117-blockscout-defillama-providers.md
 supersedes: null
-commit: null
-pr: null
+commit: b1f8efa
+pr: https://github.com/alexshemesh/hrusha/pull/9
 ---
 
 # Hardening pass: ERC-721 ingestion, doctor/heal reconciliation, local-rules backup
