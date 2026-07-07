@@ -160,3 +160,19 @@ def test_vote_scout_min_token_age(tmp_path):
     bad = VALID_CONFIG + "\nvote_scout:\n  min_token_age_days: -1\n"
     with pytest.raises(ConfigError):
         load_config(write_config(tmp_path, bad))
+
+
+def test_vote_scout_sustainability_and_safety_settings(tmp_path):
+    content = VALID_CONFIG + textwrap.dedent(
+        """
+        vote_scout:
+          min_fees_per_emission: 0.25
+          token_safety: false
+        """
+    )
+    filters = load_config(write_config(tmp_path, content)).vote_scout
+    assert filters.min_fees_per_emission == 0.25
+    assert filters.token_safety is False
+    bad = VALID_CONFIG + "\nvote_scout:\n  token_safety: maybe\n"
+    with pytest.raises(ConfigError):
+        load_config(write_config(tmp_path, bad))

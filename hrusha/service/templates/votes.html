@@ -14,7 +14,10 @@
   if filters.extra_major_symbols %} (+{{ filters.extra_major_symbols | join(', ') }}){% endif %} ·
   vote CV ≤ {{ filters.max_vote_cv }} · fee share ≥ {{ '%.0f' % (filters.min_fee_share * 100) }}% ·
   history ≥ {{ filters.min_history }} epochs{% if filters.min_token_age_days > 0 %} ·
-  token age ≥ {{ '%.0f' % filters.min_token_age_days }}d{% endif %}
+  token age ≥ {{ '%.0f' % filters.min_token_age_days }}d{% endif %}{%
+  if filters.min_fees_per_emission > 0 %} ·
+  fees/emissions ≥ {{ filters.min_fees_per_emission }}{% endif %} ·
+  token safety {{ 'on' if filters.token_safety else 'off' }}
 </p>
 
 <form method="post" action="/votes/scan">
@@ -33,6 +36,11 @@ gauge by dilution-adjusted reward per vote.</div>
 <div class="note warn">This scan is from a PREVIOUS epoch — rescan before voting.</div>
 {% endif %}
 
+{% if not result.token_safety_checked %}
+<div class="note warn">GoPlus token-safety check was unreachable this scan —
+TOKEN-RISK flags may be missing. Rescan or verify exotic tokens manually.</div>
+{% endif %}
+
 <p class="muted">
   scanned {{ result.scanned_at | when }} ·
   your voting power {{ '{:,.0f}'.format(result.my_power) }} veAERO
@@ -49,7 +57,7 @@ gauge by dilution-adjusted reward per vote.</div>
 <table>
   <tr><th></th><th>pool</th><th class="num">%/epoch</th><th class="num">APR</th>
       <th class="num">your $</th><th class="num">pool pays</th>
-      <th class="num">proj votes (M)</th><th class="num">TVL</th></tr>
+      <th class="num">proj votes (M)</th><th class="num">TVL</th><th>notes</th></tr>
   {% for p in result.suggested[:5] %}
   <tr>
     <td class="num">{{ loop.index }}</td>
@@ -60,11 +68,13 @@ gauge by dilution-adjusted reward per vote.</div>
     <td class="num">{{ p.reward_usd | usd }}</td>
     <td class="num">{{ '%.2f' % (p.projected_votes / 1000000) }}</td>
     <td class="num">${{ '{:,.0f}'.format(p.raw.tvl_usd) }}</td>
+    <td>{% for note in p.notes %}<span class="pill muted">{{ note }}</span> {% endfor %}</td>
   </tr>
   {% endfor %}
 </table>
 <p class="muted">%/epoch and APR are your projected reward against your vote power's value at
-AERO spot; your $ already includes your own votes diluting the pool</p>
+AERO spot; your $ already includes your own votes diluting the pool; muted notes
+(emissions subsidy, self-token bribes) are informational — know what you're paid in</p>
 {% else %}
 <div class="note">No pool passed every risk gate this scan — inspect the flagged table below.</div>
 {% endif %}
@@ -86,7 +96,8 @@ AERO spot; your $ already includes your own votes diluting the pool</p>
     <td class="num">{{ '%.2f' % p.usd_per_1k }}</td>
     <td class="num">{{ '%.2f' % p.stress_usd_per_1k }}</td>
     <td class="num">{{ '%.1f' % p.vapr_pct }}%</td>
-    <td>{% for flag in p.flags %}<span class="pill">{{ flag }}</span> {% endfor %}</td>
+    <td>{% for flag in p.flags %}<span class="pill">{{ flag }}</span> {% endfor
+      %}{% for note in p.notes %}<span class="pill muted">{{ note }}</span> {% endfor %}</td>
   </tr>
   {% endfor %}
 </table>

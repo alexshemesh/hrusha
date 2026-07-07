@@ -54,6 +54,10 @@ etherscan:
 #   min_fee_share: 0.10
 #   min_history: 3
 #   min_token_age_days: 0        # >0 flags pools whose youngest token is newer
+#   min_fees_per_emission: 0.1  # informational note on pools earning less in
+#                                # fees than this fraction of emitted AERO
+#   token_safety: true           # GoPlus honeypot/tax/pausable checks on
+#                                # non-major pair + bribe tokens
 
 # later, for the Sheets export:
 # sheets:
