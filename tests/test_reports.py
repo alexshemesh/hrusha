@@ -6,7 +6,7 @@ from decimal import Decimal
 from hrusha.ledger.ingest import ingest_transfers
 from hrusha.ledger.reports import strategy_summary
 from hrusha.ledger.tags import set_manual_tag
-from tests.conftest import MAIN, OUTSIDER, TX_1, TX_2, make_transfer
+from tests.conftest import MAIN, OUTSIDER, TOKEN_CONTRACT, TX_1, TX_2, make_transfer
 
 VAULT = "0x" + "b" * 40
 TX_3 = "0x" + "7" * 64
@@ -124,3 +124,71 @@ def test_untagged_and_own_transfers_stay_out(ledger):
         price_fn=usd(1),
     )
     assert strategy_summary(ledger) == []
+
+
+def cache_price(conn, key, usd, day="2026-07-07"):
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO price_cache (token, day, usd) VALUES (?, ?, ?)",
+            (key, day, usd),
+        )
+
+
+def test_vault_yield_decomposes_profit_into_in_kind_and_price_effect(ledger):
+    # coins: -100 deposited + 60 withdrawn + 50 held = +10 USDC earned in-kind
+    seed_vault_strategy(ledger)
+    cache_price(ledger, TOKEN_CONTRACT, 1.0)
+    (row,) = strategy_summary(ledger)
+    assert row.yield_items == (("USDC", 10.0, 10.0),)
+    assert row.yield_usd == 10.0
+    # profit(19) + gas(1) - income(10) - yield(10) = 0: flat prices, no drift
+    assert row.price_effect_usd == 0.0
+
+
+def test_yield_stays_undecomposed_without_a_spot_price(ledger):
+    # a partial USD sum would silently misattribute the rest to price effect
+    seed_vault_strategy(ledger)
+    (row,) = strategy_summary(ledger)
+    assert row.yield_items == (("USDC", 10.0, None),)
+    assert row.yield_usd is None
+    assert row.price_effect_usd is None
+
+
+def test_native_eth_deposits_fold_into_the_weth_family(ledger):
+    ingest_transfers(
+        ledger,
+        [
+            make_transfer(
+                tx_hash=TX_3, direction="out", token="ETH", contract=None, amount=Decimal(2)
+            ),
+            make_transfer(
+                tx_hash=TX_4, log_index=8, token="WETH", contract="0x" + "e" * 40, amount=Decimal(3)
+            ),
+        ],
+        tracked_addresses=set(),
+        price_fn=usd(1),
+    )
+    with ledger:
+        ledger.execute("UPDATE events SET source = 'ethvault'")
+    tag_events(ledger, {(TX_3, "transfer_out"): ["deposit"], (TX_4, "transfer_in"): ["withdraw"]})
+    cache_price(ledger, "ETH", 2000.0)
+    (row,) = strategy_summary(ledger)
+    assert row.yield_items == (("WETH", 1.0, 2000.0),)  # -2 ETH +3 WETH = +1 WETH
+    assert row.yield_usd == 2000.0
+
+
+def test_income_style_strategies_have_no_yield_decomposition(ledger):
+    # aerodrome locks/purchases are not deposit/withdraw legs
+    ingest_transfers(
+        ledger,
+        [make_transfer(tx_hash=TX_3, direction="out", token="AERO", amount=Decimal(5))],
+        tracked_addresses=set(),
+        price_fn=usd(1),
+    )
+    with ledger:
+        ledger.execute("UPDATE events SET source = 'aerodrome-voting'")
+    tag_events(ledger, {(TX_3, "transfer_out"): ["lock"]})
+    (row,) = strategy_summary(ledger)
+    assert row.yield_items == ()
+    assert row.yield_usd is None
+    assert row.price_effect_usd is None

@@ -19,6 +19,7 @@
 <table>
   <tr><th>strategy</th><th class="num">put in</th><th class="num">taken out</th>
       <th class="num">income</th><th class="num">gas</th><th class="num">holding now</th>
+      <th class="num">yield</th><th class="num">price effect</th>
       <th class="num">profit</th><th class="num">unpriced</th></tr>
   {% for s in strategies %}
   {% set detail = '/strategy/' + (s.source | urlencode) %}
@@ -29,6 +30,13 @@
     <td class="num"><a href="{{ detail }}#epochs">{{ s.income_usd | usd }}</a></td>
     <td class="num"><a href="{{ detail }}#flows">{{ s.gas_usd | usd }}</a></td>
     <td class="num"><a href="{{ detail }}#holding">{{ s.position_usd | usd }}</a></td>
+    <td class="num">{% if s.yield_items %}{% for token, coins, value in s.yield_items
+      %}{{ '+' if coins >= 0 }}{{ coins | amount }} {{ token }}{% if value is not none
+      %} ({{ value | usd }}){% endif %}{% if not loop.last %}<br>{% endif %}{% endfor
+      %}{% elif s.yield_usd is not none %}{{ s.yield_usd | usd }}{% else
+      %}<span class="muted">—</span>{% endif %}</td>
+    <td class="num">{% if s.price_effect_usd is not none %}{{ s.price_effect_usd | usd }}{%
+      else %}<span class="muted">—</span>{% endif %}</td>
     <td class="num"><a href="{{ detail }}"><b>{{ s.profit_usd | usd }}</b></a></td>
     <td class="num">{{ s.unpriced_count or '' }}</td>
   </tr>
@@ -36,7 +44,12 @@
 </table>
 <p class="muted">profit = income + taken out + holding now − put in − gas, USD at event
 time; veNFT purchases and rebases count under aerodrome-voting; unpriced legs are
-counted, not valued</p>
+counted, not valued.
+<b>yield</b> = what the strategy earned in its own coins (withdrawals + holding −
+deposits, valued at today's price) — auto-compounding vaults never pay separate
+rewards, so this is where their profit actually lives;
+<b>price effect</b> = the rest of the USD profit: what the asset's own price move did
+while your money sat in the strategy. income-style strategies (aerodrome) show —.</p>
 {% endif %}
 
 <h2 id="positions">Positions — {{ total_position_usd | usd }}</h2>

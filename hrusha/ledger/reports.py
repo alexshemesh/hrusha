@@ -112,6 +112,17 @@ class StrategyRow:
     position_usd: float  # latest position + claimable snapshots
     profit_usd: float  # income + withdrawn + position - deposited - other - gas
     unpriced_count: int  # legs that count toward flows but have no USD value
+    # in-kind decomposition for vault-style strategies (auto-compounders pay
+    # no income events — their yield hides inside withdrawn+holding, and the
+    # USD columns mix it with the asset's own price moves):
+    #   yield_items: (token, net coins, value at latest cached price) — net
+    #     coins = withdrawals + holding - deposits, in the asset's own units
+    #   price_effect_usd: profit + gas - income - yield: what holding the
+    #     asset through the period did to the USD number
+    # both None/empty for income-style strategies (no deposit/withdraw legs)
+    yield_items: tuple[tuple[str, float, float | None], ...] = ()
+    yield_usd: float | None = None
+    price_effect_usd: float | None = None
 
 
 def strategy_summary(
@@ -135,9 +146,15 @@ def strategy_summary(
              "gas": 0.0, "position": 0.0, "unpriced": 0},
         )  # fmt: skip
 
+    # in-kind flows per source: symbol -> {coins, contract}. Only true
+    # deposit/withdraw ASSET legs count (locks/purchases are aerodrome
+    # capital in other tokens; share mint/burn mirrors are swap-skipped)
+    in_kind: dict[str, dict[str, dict]] = {}
+
     rows = conn.execute(
         """
         SELECT e.kind, COALESCE(e.source, ''), e.usd_at_time, e.gas_usd,
+               e.token, e.contract, e.amount_native,
                COALESCE(GROUP_CONCAT(t.tag, ','), '')
         FROM events e
         LEFT JOIN tags t ON t.event_id = e.id
@@ -145,7 +162,7 @@ def strategy_summary(
         GROUP BY e.id
         """
     ).fetchall()
-    for kind, source, usd, gas_usd, tags_csv in rows:
+    for kind, source, usd, gas_usd, token, contract, amount, tags_csv in rows:
         tags = set(tags_csv.split(",")) if tags_csv else set()
         if PURCHASE_TAG in tags:
             source = _VOTING_SOURCE
@@ -160,8 +177,12 @@ def strategy_summary(
         outgoing = kind == "transfer_out"
         if outgoing and tags & {DEPOSIT_TAG, LOCK_TAG, PURCHASE_TAG}:
             slot = "deposited"
+            if DEPOSIT_TAG in tags:
+                _add_in_kind(in_kind, source, token, contract, -float(amount))
         elif not outgoing and tags & {WITHDRAW_TAG, UNLOCK_TAG}:
             slot = "withdrawn"
+            if WITHDRAW_TAG in tags:
+                _add_in_kind(in_kind, source, token, contract, float(amount))
         elif SWAP_TAG in tags:
             continue  # form change; the counted leg of the tx is elsewhere
         elif outgoing:
@@ -178,27 +199,89 @@ def strategy_summary(
             continue
         source = _VOTING_SOURCE if row.source == _REBASE_SOURCE else row.source
         bucket(source)["position"] += row.usd_at_time or 0.0
+        # held coins complete the in-kind cycle: yield = out + held - in.
+        # claimables stay out — they become income the day they arrive
+        family = in_kind.get(source)
+        token = "WETH" if row.token == "ETH" else row.token  # noqa: S105 — token symbol, not a secret
+        if row.kind == "position" and family and token in family:
+            family[token]["coins"] += float(row.amount_native)
 
-    result = [
-        StrategyRow(
-            source=source,
-            deposited_usd=b["deposited"],
-            withdrawn_usd=b["withdrawn"],
-            income_usd=b["income"],
-            other_out_usd=b["other_out"],
-            gas_usd=b["gas"],
-            position_usd=b["position"],
-            profit_usd=b["income"]
-            + b["withdrawn"]
-            + b["position"]
-            - b["deposited"]
-            - b["other_out"]
-            - b["gas"],
-            unpriced_count=int(b["unpriced"]),
+    result = []
+    for source, b in totals.items():
+        profit = (
+            b["income"] + b["withdrawn"] + b["position"]
+            - b["deposited"] - b["other_out"] - b["gas"]
+        )  # fmt: skip
+        items, yield_usd = _valued_yield(conn, in_kind.get(source))
+        result.append(
+            StrategyRow(
+                source=source,
+                deposited_usd=b["deposited"],
+                withdrawn_usd=b["withdrawn"],
+                income_usd=b["income"],
+                other_out_usd=b["other_out"],
+                gas_usd=b["gas"],
+                position_usd=b["position"],
+                profit_usd=profit,
+                unpriced_count=int(b["unpriced"]),
+                yield_items=items,
+                yield_usd=yield_usd,
+                price_effect_usd=(
+                    profit + b["gas"] - b["income"] - yield_usd if yield_usd is not None else None
+                ),
+            )
         )
-        for source, b in totals.items()
-    ]
     return sorted(result, key=lambda r: -r.profit_usd)
+
+
+def _add_in_kind(
+    in_kind: dict, source: str, token: str, contract: str | None, coins: float
+) -> None:
+    token = "WETH" if token == "ETH" else token  # noqa: S105 — 1:1 symbol merge, not a secret
+    entry = in_kind.setdefault(source, {}).setdefault(token, {"coins": 0.0, "contract": None})
+    entry["coins"] += coins
+    entry["contract"] = entry["contract"] or contract
+
+
+def _valued_yield(
+    conn: sqlite3.Connection, family: dict | None
+) -> tuple[tuple[tuple[str, float, float | None], ...], float | None]:
+    """In-kind yield items valued at the latest cached daily price.
+
+    yield_usd is None (undecomposable) when the strategy has no
+    deposit/withdraw legs at all, or when any asset lacks a price —
+    a partial sum would silently misattribute the rest to price effect."""
+    if not family:
+        return (), None
+    items = []
+    total = 0.0
+    fully_priced = True
+    for token, entry in sorted(family.items()):
+        keys = (entry["contract"], "ETH" if token == "WETH" else None, token)  # noqa: S105
+        price = _latest_cached_price(conn, keys)
+        value = entry["coins"] * price if price is not None else None
+        if value is None:
+            fully_priced = False
+        else:
+            total += value
+        if abs(entry["coins"]) < 1e-6 or (value is not None and abs(value) < 0.01):
+            continue  # dust: deposit/withdraw round-trips that net to nothing
+        items.append((token, entry["coins"], value))
+    return tuple(items), (total if fully_priced else None)
+
+
+def _latest_cached_price(conn: sqlite3.Connection, keys: tuple[str | None, ...]) -> float | None:
+    for key in keys:
+        if not key:
+            continue
+        row = conn.execute(
+            "SELECT usd FROM price_cache WHERE token = ? AND usd IS NOT NULL"
+            " ORDER BY day DESC LIMIT 1",
+            (key,),
+        ).fetchone()
+        if row:
+            return float(row[0])
+    return None
 
 
 def latest_snapshots(conn: sqlite3.Connection) -> list[SnapshotRow]:
