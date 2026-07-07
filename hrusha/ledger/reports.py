@@ -227,9 +227,7 @@ def strategy_summary(
                 yield_items=items,
                 yield_usd=yield_usd,
                 price_effect_usd=(
-                    profit + b["gas"] - b["income"] - yield_usd
-                    if yield_usd is not None
-                    else None
+                    profit + b["gas"] - b["income"] - yield_usd if yield_usd is not None else None
                 ),
             )
         )

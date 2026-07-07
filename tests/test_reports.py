@@ -158,10 +158,12 @@ def test_native_eth_deposits_fold_into_the_weth_family(ledger):
     ingest_transfers(
         ledger,
         [
-            make_transfer(tx_hash=TX_3, direction="out", token="ETH",
-                          contract=None, amount=Decimal(2)),
-            make_transfer(tx_hash=TX_4, log_index=8, token="WETH",
-                          contract="0x" + "e" * 40, amount=Decimal(3)),
+            make_transfer(
+                tx_hash=TX_3, direction="out", token="ETH", contract=None, amount=Decimal(2)
+            ),
+            make_transfer(
+                tx_hash=TX_4, log_index=8, token="WETH", contract="0x" + "e" * 40, amount=Decimal(3)
+            ),
         ],
         tracked_addresses=set(),
         price_fn=usd(1),

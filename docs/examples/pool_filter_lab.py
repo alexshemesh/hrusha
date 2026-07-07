@@ -63,8 +63,13 @@ REWARD_FLOOR_USD = 500.0  # universe: pools currently paying at least this
 UNIVERSE_CAP = 120
 LOOKBACK_EPOCHS = 18  # completed epochs pulled per pool
 SIM_EPOCHS = 12  # walk-forward simulation window
-TVL_BUCKETS = ((0, "<$100k"), (100_000, "$100k-300k"), (300_000, "$300k-1M"),
-               (1_000_000, "$1M-5M"), (5_000_000, ">$5M"))
+TVL_BUCKETS = (
+    (0, "<$100k"),
+    (100_000, "$100k-300k"),
+    (300_000, "$300k-1M"),
+    (1_000_000, "$1M-5M"),
+    (5_000_000, ">$5M"),
+)
 MY_POWER = 33_041.0  # used only to translate $/1k into personal dollars
 
 
@@ -113,6 +118,7 @@ def fetch_first_seen(http: httpx.Client, tokens: set[str]) -> dict[str, int]:
 
 def spearman(xs: list[float], ys: list[float]) -> float:
     """Rank correlation, ties broken by order — good enough for a lab."""
+
     def ranks(values: list[float]) -> list[float]:
         order = sorted(range(len(values)), key=lambda i: values[i])
         rank = [0.0] * len(values)
@@ -163,9 +169,7 @@ def main() -> None:
                 seen.add(lp.lower())
                 universe.append({"lp": lp, "votes": votes / WEI, "legs": [*bribes, *fees]})
 
-    current_prices = _fetch_prices(
-        http, {t.lower() for p in universe for t, _ in p["legs"]}
-    )
+    current_prices = _fetch_prices(http, {t.lower() for p in universe for t, _ in p["legs"]})
     token_decimals: dict[str, int] = {}
     token_symbols: dict[str, str] = {}
 
@@ -252,9 +256,7 @@ def main() -> None:
             e["per1k"] = e["reward_usd"] / e["votes"] * 1000 if e["votes"] else 0.0
         for index, e in enumerate(p["history"]):
             prior = p["history"][max(0, index - HISTORY_EPOCHS) : index]
-            e["target"] = (
-                statistics.median(x["per1k"] for x in prior) if len(prior) >= 3 else None
-            )
+            e["target"] = statistics.median(x["per1k"] for x in prior) if len(prior) >= 3 else None
 
         judged = [e for e in p["history"] if e["target"]]
         per1k = [e["per1k"] for e in p["history"] if e["votes"]]
@@ -274,30 +276,41 @@ def main() -> None:
     # -- question 1: does size predict stability? -------------------------------
     def bucket_table(groups: dict[str, list[dict]], title: str) -> None:
         print(f"{title}")
-        print(f"{'group':<14} {'pools':>5} {'med $/1k':>9} {'med CV':>7} "
-              f"{'med ratio':>9} {'p10 ratio':>9}")
+        print(
+            f"{'group':<14} {'pools':>5} {'med $/1k':>9} {'med CV':>7} "
+            f"{'med ratio':>9} {'p10 ratio':>9}"
+        )
         for name, members in groups.items():
             if not members:
                 continue
-            print(f"{name:<14} {len(members):>5} "
-                  f"{statistics.median(m['median_per1k'] for m in members):>9.2f} "
-                  f"{statistics.median(m['cv'] for m in members):>7.2f} "
-                  f"{statistics.median(m['median_ratio'] for m in members):>9.2f} "
-                  f"{statistics.median(m['p10_ratio'] for m in members):>9.2f}")
+            print(
+                f"{name:<14} {len(members):>5} "
+                f"{statistics.median(m['median_per1k'] for m in members):>9.2f} "
+                f"{statistics.median(m['cv'] for m in members):>7.2f} "
+                f"{statistics.median(m['median_ratio'] for m in members):>9.2f} "
+                f"{statistics.median(m['p10_ratio'] for m in members):>9.2f}"
+            )
         print()
 
     by_tvl: dict[str, list[dict]] = {name: [] for _, name in TVL_BUCKETS}
     for p in measured:
         by_tvl[tvl_bucket(p["tvl"])].append(p)
-    bucket_table(by_tvl, "stability by CURRENT TVL bucket "
-                         "(CV = payout volatility, ratio = realized/target):")
+    bucket_table(
+        by_tvl, "stability by CURRENT TVL bucket (CV = payout volatility, ratio = realized/target):"
+    )
 
-    print(f"rank correlation TVL vs payout CV: "
-          f"{spearman([p['tvl'] for p in measured], [p['cv'] for p in measured]):+.2f}")
-    print(f"rank correlation TVL vs p10 ratio: "
-          f"{spearman([p['tvl'] for p in measured], [p['p10_ratio'] for p in measured]):+.2f}")
-    print(f"rank correlation TVL vs median $/1k: "
-          f"{spearman([p['tvl'] for p in measured], [p['median_per1k'] for p in measured]):+.2f}\n")
+    print(
+        f"rank correlation TVL vs payout CV: "
+        f"{spearman([p['tvl'] for p in measured], [p['cv'] for p in measured]):+.2f}"
+    )
+    print(
+        f"rank correlation TVL vs p10 ratio: "
+        f"{spearman([p['tvl'] for p in measured], [p['p10_ratio'] for p in measured]):+.2f}"
+    )
+    print(
+        f"rank correlation TVL vs median $/1k: "
+        f"{spearman([p['tvl'] for p in measured], [p['median_per1k'] for p in measured]):+.2f}\n"
+    )
 
     # -- question 2: what does the majors gate cost? ----------------------------
     groups = {
@@ -325,11 +338,17 @@ def main() -> None:
     bucket_table(exotic_age, "stability by youngest token age (exotic pairs only):")
     exotics = [p for p in measured if not p["major"]]
     if len(exotics) >= 8:
-        print(f"rank correlation (exotics) token age vs payout CV: "
-              f"{spearman([p['min_age_days'] for p in exotics], [p['cv'] for p in exotics]):+.2f}")
-        print(f"rank correlation (exotics) token age vs p10 ratio: "
-              f"{spearman([p['min_age_days'] for p in exotics],
-                          [p['p10_ratio'] for p in exotics]):+.2f}\n")
+        print(
+            f"rank correlation (exotics) token age vs payout CV: "
+            f"{spearman([p['min_age_days'] for p in exotics], [p['cv'] for p in exotics]):+.2f}"
+        )
+        print(
+            f"rank correlation (exotics) token age vs p10 ratio: "
+            f"{
+                spearman(
+                    [p['min_age_days'] for p in exotics], [p['p10_ratio'] for p in exotics]
+                ):+.2f}\n"
+        )
 
     # -- walk-forward simulation under each gate variant ------------------------
     sim_ts = sorted({e["ts"] for p in pools for e in p["history"] if e["target"]})[-SIM_EPOCHS:]
@@ -341,10 +360,14 @@ def main() -> None:
         "age>=90d": lambda p: p["min_age_days"] >= 90,
         "age90+tvl300k": lambda p: p["min_age_days"] >= 90 and p["tvl"] >= 300_000,
     }
-    print(f"simulation, last {len(sim_ts)} epochs — vote best PREDICTED pool each week, "
-          f"realize its ACTUAL $/1k (personal $ at {MY_POWER:,.0f} votes):")
-    print(f"{'variant':<14} {'total $/1k':>10} {'personal $':>10} {'worst week':>10} "
-          f"{'weekly CV':>9}  weeks won by exotic")
+    print(
+        f"simulation, last {len(sim_ts)} epochs — vote best PREDICTED pool each week, "
+        f"realize its ACTUAL $/1k (personal $ at {MY_POWER:,.0f} votes):"
+    )
+    print(
+        f"{'variant':<14} {'total $/1k':>10} {'personal $':>10} {'worst week':>10} "
+        f"{'weekly CV':>9}  weeks won by exotic"
+    )
     for name, allowed in variants.items():
         weekly = []
         exotic_weeks = 0
@@ -363,15 +386,19 @@ def main() -> None:
             exotic_weeks += not chosen["major"]
         total = sum(weekly)
         cv = statistics.pstdev(weekly) / statistics.mean(weekly) if weekly else 0.0
-        print(f"{name:<14} {total:>10.2f} {total * MY_POWER / 1000:>10,.2f} "
-              f"{min(weekly):>10.2f} {cv:>9.2f}  {exotic_weeks}")
+        print(
+            f"{name:<14} {total:>10.2f} {total * MY_POWER / 1000:>10,.2f} "
+            f"{min(weekly):>10.2f} {cv:>9.2f}  {exotic_weeks}"
+        )
     oracle = []
     for ts in sim_ts:
         actuals = [e["per1k"] for p in pools for e in p["history"] if e["ts"] == ts and e["target"]]
         if actuals:
             oracle.append(max(actuals))
-    print(f"{'oracle':<14} {sum(oracle):>10.2f} {sum(oracle) * MY_POWER / 1000:>10,.2f} "
-          f"{min(oracle):>10.2f}  (hindsight ceiling)")
+    print(
+        f"{'oracle':<14} {sum(oracle):>10.2f} {sum(oracle) * MY_POWER / 1000:>10,.2f} "
+        f"{min(oracle):>10.2f}  (hindsight ceiling)"
+    )
 
     print("\ncaveats: TVL is today's — survivors that grew get their past credited to")
     print("their present bucket; the universe is pools paying today (survivorship);")

@@ -129,8 +129,13 @@ def _scout_filters(raw: dict) -> ScoutFilters:
         raise ConfigError("config key vote_scout must be a mapping of filter settings")
     defaults = ScoutFilters()
     known = {
-        "min_tvl_usd", "require_major_pair", "extra_major_symbols",
-        "max_vote_cv", "min_fee_share", "min_history", "min_token_age_days",
+        "min_tvl_usd",
+        "require_major_pair",
+        "extra_major_symbols",
+        "max_vote_cv",
+        "min_fee_share",
+        "min_history",
+        "min_token_age_days",
     }
     for key in block:
         if key not in known:

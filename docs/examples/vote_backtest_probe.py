@@ -120,8 +120,10 @@ def main() -> None:
         ]
         epochs.sort(key=lambda e: e["ts"])  # oldest first for the walk-forward
         pools.append({"lp": lp, "name": name, "epochs": epochs})
-        print(f"{name}: {len(epochs)} completed epochs "
-              f"({day(epochs[0]['ts'])} .. {day(epochs[-1]['ts'])})")
+        print(
+            f"{name}: {len(epochs)} completed epochs "
+            f"({day(epochs[0]['ts'])} .. {day(epochs[-1]['ts'])})"
+        )
 
     # -- value every epoch's rewards at claim-time (epoch flip) prices ---------
     by_claim_ts: dict[int, set[str]] = {}
@@ -155,8 +157,10 @@ def main() -> None:
             else:
                 e["predicted_per_1k"] = None
 
-    print(f"\nper-epoch outcomes, last {EVAL_EPOCHS} completed epochs "
-          f"(rewards valued at claim-day prices):")
+    print(
+        f"\nper-epoch outcomes, last {EVAL_EPOCHS} completed epochs "
+        f"(rewards valued at claim-day prices):"
+    )
     for p in pools:
         rows = [e for e in p["epochs"] if e["predicted_per_1k"] is not None][-EVAL_EPOCHS:]
         actuals = [e["usd_per_1k"] for e in rows]
@@ -168,21 +172,29 @@ def main() -> None:
         print(f"\n== {p['name']}  ({p['lp']})")
         print(f"{'epoch':<12} {'votes(M)':>9} {'reward$':>10} {'$/1k act':>9} {'$/1k pred':>10}")
         for e in rows:
-            print(f"{day(e['ts']):<12} {e['votes'] / 1e6:>9.2f} {e['reward_usd']:>10,.0f} "
-                  f"{e['usd_per_1k']:>9.2f} {e['predicted_per_1k']:>10.2f}")
+            print(
+                f"{day(e['ts']):<12} {e['votes'] / 1e6:>9.2f} {e['reward_usd']:>10,.0f} "
+                f"{e['usd_per_1k']:>9.2f} {e['predicted_per_1k']:>10.2f}"
+            )
         if actuals:
-            print(f"   median actual ${statistics.median(actuals):.2f}/1k, "
-                  f"worst ${min(actuals):.2f}, best ${max(actuals):.2f}, "
-                  f"median |prediction error| "
-                  f"{statistics.median(errors):.0f}%" if errors else "   no priced epochs")
+            print(
+                f"   median actual ${statistics.median(actuals):.2f}/1k, "
+                f"worst ${min(actuals):.2f}, best ${max(actuals):.2f}, "
+                f"median |prediction error| "
+                f"{statistics.median(errors):.0f}%"
+                if errors
+                else "   no priced epochs"
+            )
 
     # -- strategy sim: top predicted pick each epoch, realized outcome ---------
     eval_ts = sorted(
         {e["ts"] for p in pools for e in p["epochs"] if e["predicted_per_1k"] is not None}
     )[-EVAL_EPOCHS:]
     my_power = 33_041.0  # TODO(alex): current power; history not reconstructed
-    print(f"\nstrategy sim — vote ALL {my_power:,.0f} power on the best PREDICTED pool "
-          f"each epoch, collect its ACTUAL payout:")
+    print(
+        f"\nstrategy sim — vote ALL {my_power:,.0f} power on the best PREDICTED pool "
+        f"each epoch, collect its ACTUAL payout:"
+    )
     total = 0.0
     for ts in eval_ts:
         candidates = [
@@ -196,8 +208,10 @@ def main() -> None:
         predicted, actual, name = max(candidates)
         earned = actual * my_power / 1000
         total += earned
-        print(f"  {day(ts)}: {name:<22} predicted ${predicted:>6.2f}/1k, "
-              f"actual ${actual:>6.2f}/1k -> ${earned:,.2f}")
+        print(
+            f"  {day(ts)}: {name:<22} predicted ${predicted:>6.2f}/1k, "
+            f"actual ${actual:>6.2f}/1k -> ${earned:,.2f}"
+        )
     print(f"  simulated total over {len(eval_ts)} epochs: ${total:,.2f}")
 
     # -- what actually happened, per the ledger --------------------------------
@@ -215,8 +229,10 @@ def main() -> None:
     finally:
         conn.close()
     actual_total = sum(usd or 0.0 for _, usd in rows)
-    print(f"\nledger says your ACTUAL aerodrome-voting claim income over the last "
-          f"{len(rows)} epochs with claims: ${actual_total:,.2f}")
+    print(
+        f"\nledger says your ACTUAL aerodrome-voting claim income over the last "
+        f"{len(rows)} epochs with claims: ${actual_total:,.2f}"
+    )
     for epoch_id, usd in rows:
         print(f"  {epoch_id}: ${usd or 0.0:,.2f}")
     print("\ncaveats: claims land in the epoch you CLAIM, not the epoch you earned;")

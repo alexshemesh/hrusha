@@ -168,6 +168,7 @@ def main() -> None:
                 break
             owned = kind == "transfer_in"
         return owned
+
     current_block = w3.eth.block_number
     from_block = max(0, current_block - (now - first_activity + 30 * 86400) // 2)
     print(f"scanning Voter logs from block {from_block} (~{day(first_activity)} minus margin)")
@@ -181,9 +182,7 @@ def main() -> None:
         voted, abstained = wallet_events["voted"], wallet_events["abstained"]
         by_tx: dict[str, dict] = {}
         for event in voted:
-            entry = by_tx.setdefault(
-                event["tx"], {"ts": event["ts"], "votes": defaultdict(dict)}
-            )
+            entry = by_tx.setdefault(event["tx"], {"ts": event["ts"], "votes": defaultdict(dict)})
             entry["votes"][event["token_id"]][event["pool"]] = event["weight"]
         for event in abstained:  # reset-only txs clear the veNFT's standing votes
             by_tx.setdefault(event["tx"], {"ts": event["ts"], "votes": defaultdict(dict)})
@@ -196,8 +195,10 @@ def main() -> None:
     if not actions:
         raise SystemExit("no Voted events found for the tracked wallets")
     first_vote_ts = min(a[0][0] for a in actions.values())
-    print(f"vote history: {sum(len(a) for a in actions.values())} vote actions across "
-          f"{len(actions)} veNFTs since {day(first_vote_ts)}")
+    print(
+        f"vote history: {sum(len(a) for a in actions.values())} vote actions across "
+        f"{len(actions)} veNFTs since {day(first_vote_ts)}"
+    )
 
     # -- 2. reward history for every pool ever voted ---------------------------
     voted_pools = sorted({pool for acts in actions.values() for _, pools in acts for pool in pools})
@@ -267,15 +268,19 @@ def main() -> None:
             state = pools
         return state
 
-    print(f"\n{'epoch':<12} {'pool':<26} {'my votes':>9} {'target$':>8} {'real$':>8} "
-          f"{'real/1k':>8} {'tgt/1k':>7}  verdict")
+    print(
+        f"\n{'epoch':<12} {'pool':<26} {'my votes':>9} {'target$':>8} {'real$':>8} "
+        f"{'real/1k':>8} {'tgt/1k':>7}  verdict"
+    )
     epochs_all = range(
         first_vote_ts // SECONDS_PER_WEEK * SECONDS_PER_WEEK, epoch_start, SECONDS_PER_WEEK
     )
     unknown_ownership = {t for t in actions if t not in moves_by_token}
     if unknown_ownership:
-        print(f"warning: no ledger ownership record for veNFTs {sorted(unknown_ownership)}; "
-              f"their votes are excluded")
+        print(
+            f"warning: no ledger ownership record for veNFTs {sorted(unknown_ownership)}; "
+            f"their votes are excluded"
+        )
     total_target, total_real, hits, misses, judged = 0.0, 0.0, 0, 0, 0
     for ts in epochs_all:
         epoch_end = ts + SECONDS_PER_WEEK
@@ -288,13 +293,17 @@ def main() -> None:
             for pool, weight in standing_votes(token_id, epoch_end).items():
                 merged[pool] += weight
         if merged:
-            print(f"{day(ts):<12} -- standing power {sum(merged.values()) / 1000:.1f}k "
-                  f"across {len(merged)} pools --")
+            print(
+                f"{day(ts):<12} -- standing power {sum(merged.values()) / 1000:.1f}k "
+                f"across {len(merged)} pools --"
+            )
         for pool, weight in sorted(merged.items(), key=lambda kv: -kv[1]):
             e = pool_epochs.get(pool, {}).get(ts)
             if e is None or not e["votes"]:
-                print(f"{day(ts):<12} {pool_names.get(pool, pool[:10]):<26} "
-                      f"{weight / 1000:>8.1f}k {'?':>8} {'?':>8} {'?':>8} {'?':>7}  no epoch data")
+                print(
+                    f"{day(ts):<12} {pool_names.get(pool, pool[:10]):<26} "
+                    f"{weight / 1000:>8.1f}k {'?':>8} {'?':>8} {'?':>8} {'?':>7}  no epoch data"
+                )
                 continue
             real = e["reward_usd"] * weight / e["votes"]
             target = e["target_per_1k"] * weight / 1000 if e["target_per_1k"] else None
@@ -308,18 +317,26 @@ def main() -> None:
                 verdict = "HIT" if hit else "miss"
             target_txt = f"{target:.2f}" if target else "—"
             target_1k_txt = f"{e['target_per_1k']:.2f}" if e["target_per_1k"] else "—"
-            print(f"{day(ts):<12} {pool_names.get(pool, pool[:10]):<26} "
-                  f"{weight / 1000:>8.1f}k "
-                  f"{target_txt:>8} {real:>8.2f} "
-                  f"{e['usd_per_1k']:>8.2f} {target_1k_txt:>7}"
-                  f"  {verdict}")
+            print(
+                f"{day(ts):<12} {pool_names.get(pool, pool[:10]):<26} "
+                f"{weight / 1000:>8.1f}k "
+                f"{target_txt:>8} {real:>8.2f} "
+                f"{e['usd_per_1k']:>8.2f} {target_1k_txt:>7}"
+                f"  {verdict}"
+            )
 
-    print(f"\nverdict over {judged} judged pool-epochs "
-          f"(target = scout's walk-forward $/1k at vote time, hit = ≥{HIT_THRESHOLD:.0%}):")
-    print(f"  hits {hits} / misses {misses}"
-          + (f"  ({hits / (hits + misses):.0%} hit rate)" if hits + misses else ""))
-    print(f"  total targeted ${total_target:,.2f} vs realized ${total_real:,.2f}"
-          + (f"  ({total_real / total_target:.0%} of target)" if total_target else ""))
+    print(
+        f"\nverdict over {judged} judged pool-epochs "
+        f"(target = scout's walk-forward $/1k at vote time, hit = ≥{HIT_THRESHOLD:.0%}):"
+    )
+    print(
+        f"  hits {hits} / misses {misses}"
+        + (f"  ({hits / (hits + misses):.0%} hit rate)" if hits + misses else "")
+    )
+    print(
+        f"  total targeted ${total_target:,.2f} vs realized ${total_real:,.2f}"
+        + (f"  ({total_real / total_target:.0%} of target)" if total_target else "")
+    )
     print("\ncaveats: realized = your weight-share of the epoch's final rewards at")
     print("claim-day prices — what the vote EARNED, independent of when you claimed;")
     print("pools younger than 3 epochs at vote time have no target and aren't judged")

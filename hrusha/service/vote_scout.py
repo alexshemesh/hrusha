@@ -66,11 +66,33 @@ STRESS_VOTE_FACTOR = 1.15  # stress case: historical max final votes, plus this
 # keep fakes out, this only expresses the operator's taste for majors)
 MAJOR_SYMBOLS = frozenset(
     {
-        "USDC", "USDbC", "USDT", "USDT0", "DAI", "USDS", "sUSDS", "USDe", "sUSDe",
-        "GHO", "USD+", "EURC", "msUSD",
-        "WETH", "ETH", "wstETH", "cbETH", "weETH", "rETH", "ezETH", "wrsETH",
-        "msETH", "superOETHb",
-        "cbBTC", "WBTC", "tBTC", "LBTC",
+        "USDC",
+        "USDbC",
+        "USDT",
+        "USDT0",
+        "DAI",
+        "USDS",
+        "sUSDS",
+        "USDe",
+        "sUSDe",
+        "GHO",
+        "USD+",
+        "EURC",
+        "msUSD",
+        "WETH",
+        "ETH",
+        "wstETH",
+        "cbETH",
+        "weETH",
+        "rETH",
+        "ezETH",
+        "wrsETH",
+        "msETH",
+        "superOETHb",
+        "cbBTC",
+        "WBTC",
+        "tBTC",
+        "LBTC",
         "AERO",
     }
 )
@@ -115,31 +137,75 @@ REWARDS_SUGAR_ABI = [
     },
 ]
 REGISTRY_ABI = [
-    {"name": "poolFactories", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "address[]"}]},
+    {
+        "name": "poolFactories",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address[]"}],
+    },
 ]
 FACTORY_ABI = [
-    {"name": "allPoolsLength", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "uint256"}]},
+    {
+        "name": "allPoolsLength",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
 ]
 POOL_ABI = [
-    {"name": "token0", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "address"}]},
-    {"name": "token1", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "address"}]},
-    {"name": "tickSpacing", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "int24"}]},  # CL (Slipstream) pools only
-    {"name": "stable", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "bool"}]},  # v2 AMM pools only
+    {
+        "name": "token0",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+    },
+    {
+        "name": "token1",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+    },
+    {
+        "name": "tickSpacing",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "int24"}],
+    },  # CL (Slipstream) pools only
+    {
+        "name": "stable",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "bool"}],
+    },  # v2 AMM pools only
 ]
 ERC20_ABI = [
-    {"name": "symbol", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "string"}]},
-    {"name": "decimals", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "uint8"}]},
-    {"name": "balanceOf", "type": "function", "stateMutability": "view",
-     "inputs": [{"name": "", "type": "address"}],
-     "outputs": [{"name": "", "type": "uint256"}]},
+    {
+        "name": "symbol",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "string"}],
+    },
+    {
+        "name": "decimals",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint8"}],
+    },
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [{"name": "", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
 ]
 
 
@@ -337,8 +403,10 @@ def scan(config: Config) -> ScoutResult:
         if address not in token_meta:
             erc20 = w3.eth.contract(address=Web3.to_checksum_address(address), abi=ERC20_ABI)
             try:
-                token_meta[address] = (erc20.functions.symbol().call(),
-                                       erc20.functions.decimals().call())
+                token_meta[address] = (
+                    erc20.functions.symbol().call(),
+                    erc20.functions.decimals().call(),
+                )
             except Exception:  # noqa: BLE001 — spam/odd tokens: show the address instead
                 token_meta[address] = (address[:10], 18)
         return token_meta[address]
@@ -364,9 +432,18 @@ def scan(config: Config) -> ScoutResult:
         try:
             token0, token1 = pool.functions.token0().call(), pool.functions.token1().call()
         except Exception:  # noqa: BLE001 — not a standard pool; keep it, visibly unpriced
-            raws.append(RawPool(lp=p["lp"], name=p["lp"][:10], symbols=(), votes=p["votes"],
-                                fees_usd=p["fees_usd"], incentives_usd=p["incentives_usd"],
-                                blind_share=p["blind_share"], tvl_usd=0.0))
+            raws.append(
+                RawPool(
+                    lp=p["lp"],
+                    name=p["lp"][:10],
+                    symbols=(),
+                    votes=p["votes"],
+                    fees_usd=p["fees_usd"],
+                    incentives_usd=p["incentives_usd"],
+                    blind_share=p["blind_share"],
+                    tvl_usd=0.0,
+                )
+            )
             continue
         prices.update(_fetch_prices(http, {token0.lower(), token1.lower()} - set(prices)))
         pair_tokens[p["lp"]] = (token0.lower(), token1.lower())

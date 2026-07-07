@@ -366,9 +366,7 @@ def test_votes_scan_failure_is_reported_not_raised(config):
 
 
 def test_votes_page_escapes_chain_derived_pool_names(config):
-    client = make_client(
-        config, scout_runner=lambda cfg: make_scout_result(pool_name=SPAM_SYMBOL)
-    )
+    client = make_client(config, scout_runner=lambda cfg: make_scout_result(pool_name=SPAM_SYMBOL))
     client.post("/votes/scan", follow_redirects=False)
     for _ in range(100):
         body = client.get("/votes").text

@@ -83,9 +83,7 @@ def test_unpriced_reward_tokens_are_flagged():
 
 
 def test_pure_incentive_pool_is_flagged():
-    score = score_pool(
-        clean_pool(fees_usd=100.0, incentives_usd=20_000.0), AERO_PRICE, MY_POWER
-    )
+    score = score_pool(clean_pool(fees_usd=100.0, incentives_usd=20_000.0), AERO_PRICE, MY_POWER)
     assert any(flag.startswith("INCENTIVE-ONLY") for flag in score.flags)
 
 
@@ -159,8 +157,11 @@ def test_unpriced_rewards_flag_is_not_tunable():
     from hrusha.config import ScoutFilters
 
     permissive = ScoutFilters(
-        min_tvl_usd=0.0, require_major_pair=False, max_vote_cv=99.0,
-        min_fee_share=0.0, min_history=0,
+        min_tvl_usd=0.0,
+        require_major_pair=False,
+        max_vote_cv=99.0,
+        min_fee_share=0.0,
+        min_history=0,
     )
     score = score_pool(clean_pool(blind_share=0.4), AERO_PRICE, MY_POWER, permissive)
     assert any(flag.startswith("UNPRICED-REWARDS") for flag in score.flags)
@@ -182,4 +183,3 @@ def test_young_token_gate_flags_new_and_unknown_tokens():
     assert "YOUNG-TOKEN(0d)" in unknown.flags  # never priced = treat as brand new
     seasoned = score_pool(clean_pool(min_token_age_days=400.0), AERO_PRICE, MY_POWER, gated)
     assert not any(flag.startswith("YOUNG-TOKEN") for flag in seasoned.flags)
-

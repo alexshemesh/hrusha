@@ -73,11 +73,33 @@ MIN_PRICE_CONFIDENCE = 0.8  # DefiLlama confidence below this = sketchy pricing
 # keep fakes out, this only expresses the operator's taste for majors)
 MAJOR_SYMBOLS = frozenset(
     {
-        "USDC", "USDbC", "USDT", "USDT0", "DAI", "USDS", "sUSDS", "USDe", "sUSDe",
-        "GHO", "USD+", "EURC", "msUSD",
-        "WETH", "ETH", "wstETH", "cbETH", "weETH", "rETH", "ezETH", "wrsETH",
-        "msETH", "superOETHb",
-        "cbBTC", "WBTC", "tBTC", "LBTC",
+        "USDC",
+        "USDbC",
+        "USDT",
+        "USDT0",
+        "DAI",
+        "USDS",
+        "sUSDS",
+        "USDe",
+        "sUSDe",
+        "GHO",
+        "USD+",
+        "EURC",
+        "msUSD",
+        "WETH",
+        "ETH",
+        "wstETH",
+        "cbETH",
+        "weETH",
+        "rETH",
+        "ezETH",
+        "wrsETH",
+        "msETH",
+        "superOETHb",
+        "cbBTC",
+        "WBTC",
+        "tBTC",
+        "LBTC",
         "AERO",
     }
 )
@@ -120,22 +142,52 @@ REWARDS_SUGAR_ABI = [
     },
 ]
 REGISTRY_ABI = [
-    {"name": "poolFactories", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "address[]"}]},
+    {
+        "name": "poolFactories",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address[]"}],
+    },
 ]
 FACTORY_ABI = [
-    {"name": "allPoolsLength", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "uint256"}]},
+    {
+        "name": "allPoolsLength",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
 ]
 POOL_ABI = [
-    {"name": "token0", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "address"}]},
-    {"name": "token1", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "address"}]},
-    {"name": "tickSpacing", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "int24"}]},  # CL (Slipstream) pools only
-    {"name": "stable", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "bool"}]},  # v2 AMM pools only
+    {
+        "name": "token0",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+    },
+    {
+        "name": "token1",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address"}],
+    },
+    {
+        "name": "tickSpacing",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "int24"}],
+    },  # CL (Slipstream) pools only
+    {
+        "name": "stable",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "bool"}],
+    },  # v2 AMM pools only
 ]
 
 
@@ -150,14 +202,30 @@ def pool_kind(pool) -> str:
         except Exception:  # noqa: BLE001, S112 — wrong pool flavor; try the next
             continue
     return "?"
+
+
 ERC20_ABI = [
-    {"name": "symbol", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "string"}]},
-    {"name": "decimals", "type": "function", "stateMutability": "view", "inputs": [],
-     "outputs": [{"name": "", "type": "uint8"}]},
-    {"name": "balanceOf", "type": "function", "stateMutability": "view",
-     "inputs": [{"name": "", "type": "address"}],
-     "outputs": [{"name": "", "type": "uint256"}]},
+    {
+        "name": "symbol",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "string"}],
+    },
+    {
+        "name": "decimals",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint8"}],
+    },
+    {
+        "name": "balanceOf",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [{"name": "", "type": "address"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
 ]
 
 
@@ -204,8 +272,10 @@ def main() -> None:
     now = int(time.time())
     epoch_start = now // SECONDS_PER_WEEK * SECONDS_PER_WEEK
     cutoff = epoch_start + SECONDS_PER_WEEK - 3600  # final hour: voting disabled
-    print(f"epoch started {when(epoch_start)}; vote cutoff {when(cutoff)} "
-          f"({(cutoff - now) / 3600:.1f}h from now)")
+    print(
+        f"epoch started {when(epoch_start)}; vote cutoff {when(cutoff)} "
+        f"({(cutoff - now) / 3600:.1f}h from now)"
+    )
 
     rewards_sugar = w3.eth.contract(
         address=Web3.to_checksum_address(REWARDS_SUGAR), abi=REWARDS_SUGAR_ABI
@@ -235,14 +305,14 @@ def main() -> None:
             seen.add(lp.lower())
             pools.append({"lp": lp, "votes": votes / WEI, "bribes": bribes, "fees": fees})
         if offset // EPOCHS_PER_CALL % 10 == 9:
-            print(f"  scanned {offset + EPOCHS_PER_CALL}/{pool_count} indexes, "
-                  f"{len(pools)} alive so far")
+            print(
+                f"  scanned {offset + EPOCHS_PER_CALL}/{pool_count} indexes, "
+                f"{len(pools)} alive so far"
+            )
     print(f"gauged pools with a running epoch: {len(pools)}")
 
     # -- 2. price every reward token once, in batches ------------------------
-    reward_tokens = {
-        token.lower() for p in pools for token, _ in [*p["bribes"], *p["fees"]]
-    }
+    reward_tokens = {token.lower() for p in pools for token, _ in [*p["bribes"], *p["fees"]]}
     reward_tokens.add(AERO_CONTRACT)
     prices = fetch_prices(http, reward_tokens)
     aero_price = prices.get(AERO_CONTRACT, (0.0, 0.0))[0]
@@ -255,8 +325,10 @@ def main() -> None:
         if address not in token_meta:
             erc20 = w3.eth.contract(address=Web3.to_checksum_address(address), abi=ERC20_ABI)
             try:
-                token_meta[address] = (erc20.functions.symbol().call(),
-                                       erc20.functions.decimals().call())
+                token_meta[address] = (
+                    erc20.functions.symbol().call(),
+                    erc20.functions.decimals().call(),
+                )
             except Exception:  # noqa: BLE001 — spam/odd tokens: show the address instead
                 token_meta[address] = (address[:10], 18)
         return token_meta[address]
@@ -300,9 +372,13 @@ def main() -> None:
         p["tvl_usd"] = tvl
         history = rewards_sugar.functions.epochsByAddress(HISTORY_EPOCHS + 1, 0, lp).call()
         p["history"] = [
-            {"ts": ts, "votes": votes / WEI,
-             "reward_usd": sum(reward_usd(legs, prices, token_decimals)[0]
-                               for legs in (bribes, fees))}
+            {
+                "ts": ts,
+                "votes": votes / WEI,
+                "reward_usd": sum(
+                    reward_usd(legs, prices, token_decimals)[0] for legs in (bribes, fees)
+                ),
+            }
             for ts, _lp, votes, _em, bribes, fees in history
             if ts < epoch_start  # completed epochs only: those votes are FINAL
         ][:HISTORY_EPOCHS]
@@ -342,8 +418,10 @@ def main() -> None:
         p["flags"] = flags
 
     ranked = sorted(candidates, key=lambda p: -p["usd_per_1k"])
-    print(f"\n{'pool':<26} {'TVL$':>12} {'votes(M)':>9} {'proj(M)':>8} {'fees$':>9} "
-          f"{'incent$':>9} {'$/1k':>7} {'strss':>6} {'vAPR%':>6}  flags")
+    print(
+        f"\n{'pool':<26} {'TVL$':>12} {'votes(M)':>9} {'proj(M)':>8} {'fees$':>9} "
+        f"{'incent$':>9} {'$/1k':>7} {'strss':>6} {'vAPR%':>6}  flags"
+    )
     for p in ranked:
         print(
             f"{p['name']:<26} {p['tvl_usd']:>12,.0f} {p['votes'] / 1e6:>9.2f} "
@@ -368,21 +446,27 @@ def main() -> None:
             nft = dict(zip(fields, raw, strict=True))
             my_power += nft["voting_amount"] / WEI
             voted = nft["voted_at"] >= epoch_start
-            print(f"\n{label} veNFT #{nft['id']}: power {nft['voting_amount'] / WEI:,.0f}, "
-                  f"voted this epoch: {'YES' if voted else 'NO'}")
+            print(
+                f"\n{label} veNFT #{nft['id']}: power {nft['voting_amount'] / WEI:,.0f}, "
+                f"voted this epoch: {'YES' if voted else 'NO'}"
+            )
 
     my_value_usd = my_power * aero_price  # what the vote power is worth in AERO terms
-    print(f"\nSUGGESTED (no risk flags except EXOTIC-PAIR tolerated on none), "
-          f"with your {my_power:,.0f} votes (≈${my_value_usd:,.0f}) in the denominator:")
+    print(
+        f"\nSUGGESTED (no risk flags except EXOTIC-PAIR tolerated on none), "
+        f"with your {my_power:,.0f} votes (≈${my_value_usd:,.0f}) in the denominator:"
+    )
     suggested = [p for p in ranked if not p["flags"]][:5]
     for rank, p in enumerate(suggested, start=1):
         mine = p["reward_usd"] * my_power / (p["projected_votes"] + my_power)
         epoch_pct = mine / my_value_usd * 100 if my_value_usd else 0.0
         apr_pct = epoch_pct * SECONDS_PER_YEAR / SECONDS_PER_WEEK
-        print(f"  {rank}. {p['name']:<26} {epoch_pct:.3f}%/epoch = {apr_pct:.1f}% APR "
-              f"(${mine:,.2f}; pool pays ${p['reward_usd']:,.0f} to "
-              f"{p['projected_votes'] / 1e6:.2f}M votes, TVL ${p['tvl_usd']:,.0f})"
-              f"\n     pool address: {p['lp']}")
+        print(
+            f"  {rank}. {p['name']:<26} {epoch_pct:.3f}%/epoch = {apr_pct:.1f}% APR "
+            f"(${mine:,.2f}; pool pays ${p['reward_usd']:,.0f} to "
+            f"{p['projected_votes'] / 1e6:.2f}M votes, TVL ${p['tvl_usd']:,.0f})"
+            f"\n     pool address: {p['lp']}"
+        )
     if not suggested:
         print("  none passed every gate — inspect the flagged table above")
 
