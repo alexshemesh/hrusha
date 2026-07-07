@@ -95,3 +95,68 @@ def test_invalid_yaml_does_not_echo_content(tmp_path):
 def test_custom_db_path(tmp_path):
     path = write_config(tmp_path, VALID_CONFIG + 'db_path: "/data/hrusha.db"\n')
     assert str(load_config(path).db_path) == "/data/hrusha.db"
+
+
+def test_vote_scout_defaults_when_section_absent(tmp_path):
+    from hrusha.config import ScoutFilters
+
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+    assert config.vote_scout == ScoutFilters()
+    assert config.vote_scout.min_tvl_usd == 300_000.0
+    assert config.vote_scout.require_major_pair is True
+
+
+def test_vote_scout_custom_filters(tmp_path):
+    content = VALID_CONFIG + textwrap.dedent(
+        """
+        vote_scout:
+          min_tvl_usd: 150000
+          require_major_pair: false
+          extra_major_symbols: [REI, VIRTUAL]
+          max_vote_cv: 0.9
+          min_fee_share: 0.05
+          min_history: 4
+        """
+    )
+    filters = load_config(write_config(tmp_path, content)).vote_scout
+    assert filters.min_tvl_usd == 150_000.0
+    assert filters.require_major_pair is False
+    assert filters.extra_major_symbols == ("REI", "VIRTUAL")
+    assert filters.max_vote_cv == 0.9
+    assert filters.min_fee_share == 0.05
+    assert filters.min_history == 4
+
+
+def test_vote_scout_partial_section_keeps_other_defaults(tmp_path):
+    content = VALID_CONFIG + "\nvote_scout:\n  min_tvl_usd: 50000\n"
+    filters = load_config(write_config(tmp_path, content)).vote_scout
+    assert filters.min_tvl_usd == 50_000.0
+    assert filters.require_major_pair is True
+    assert filters.min_history == 3
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "vote_scout:\n  min_tvl_usd: -5\n",
+        "vote_scout:\n  min_tvl_usd: much\n",
+        "vote_scout:\n  require_major_pair: sometimes\n",
+        "vote_scout:\n  extra_major_symbols: REI\n",
+        "vote_scout:\n  min_fee_share: 1.5\n",
+        "vote_scout:\n  min_history: 2.5\n",
+        "vote_scout:\n  no_such_gate: 1\n",
+        "vote_scout: just-a-string\n",
+    ],
+)
+def test_vote_scout_rejects_malformed_settings(tmp_path, snippet):
+    with pytest.raises(ConfigError):
+        load_config(write_config(tmp_path, VALID_CONFIG + "\n" + snippet))
+
+
+def test_vote_scout_min_token_age(tmp_path):
+    content = VALID_CONFIG + "\nvote_scout:\n  min_token_age_days: 90\n"
+    filters = load_config(write_config(tmp_path, content)).vote_scout
+    assert filters.min_token_age_days == 90.0
+    bad = VALID_CONFIG + "\nvote_scout:\n  min_token_age_days: -1\n"
+    with pytest.raises(ConfigError):
+        load_config(write_config(tmp_path, bad))

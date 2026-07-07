@@ -26,11 +26,30 @@ class ConfigError(Exception):
 
 
 @dataclass(frozen=True)
+class ScoutFilters:
+    """Vote-scout risk gates, operator-tunable via the vote_scout section.
+
+    Defaults match the shipped gates; docs/examples/pool_filter_lab.py is
+    the tool for re-deriving them from realized epoch data."""
+
+    min_tvl_usd: float = 300_000.0
+    require_major_pair: bool = True
+    extra_major_symbols: tuple[str, ...] = ()  # operator-trusted beyond the builtin set
+    max_vote_cv: float = 0.6
+    min_fee_share: float = 0.10
+    min_history: int = 3
+    # 0 disables the gate; when set, pools whose YOUNGEST pair token was first
+    # priced by DefiLlama fewer than this many days ago are flagged YOUNG-TOKEN
+    min_token_age_days: float = 0.0
+
+
+@dataclass(frozen=True)
 class Config:
     addresses: dict[str, str]  # label -> lowercased 0x address
     alchemy_api_key: str
     etherscan_api_key: str | None
     db_path: Path
+    vote_scout: ScoutFilters = ScoutFilters()
 
 
 def config_path() -> Path:
@@ -61,6 +80,7 @@ def load_config(path: Path | None = None) -> Config:
         alchemy_api_key=_required_api_key(raw, section="alchemy"),
         etherscan_api_key=_optional_api_key(raw, section="etherscan"),
         db_path=_db_path(raw),
+        vote_scout=_scout_filters(raw),
     )
 
 
@@ -99,6 +119,49 @@ def _optional_api_key(raw: dict, section: str) -> str | None:
     if not isinstance(key, str) or not key.strip():
         raise ConfigError(f"config key {section}.api_key must be a non-empty string")
     return key.strip()
+
+
+def _scout_filters(raw: dict) -> ScoutFilters:
+    block = raw.get("vote_scout")
+    if block is None:
+        return ScoutFilters()
+    if not isinstance(block, dict):
+        raise ConfigError("config key vote_scout must be a mapping of filter settings")
+    defaults = ScoutFilters()
+    known = {
+        "min_tvl_usd", "require_major_pair", "extra_major_symbols",
+        "max_vote_cv", "min_fee_share", "min_history", "min_token_age_days",
+    }
+    for key in block:
+        if key not in known:
+            raise ConfigError(f"unknown vote_scout key: {key} (known: {', '.join(sorted(known))})")
+
+    def number(key: str, default: float, upper: float | None = None) -> float:
+        value = block.get(key, default)
+        if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
+            raise ConfigError(f"vote_scout.{key} must be a non-negative number")
+        if upper is not None and value > upper:
+            raise ConfigError(f"vote_scout.{key} must be <= {upper}")
+        return float(value)
+
+    require_major = block.get("require_major_pair", defaults.require_major_pair)
+    if not isinstance(require_major, bool):
+        raise ConfigError("vote_scout.require_major_pair must be true or false")
+    extra = block.get("extra_major_symbols", [])
+    if not isinstance(extra, list) or not all(isinstance(s, str) and s.strip() for s in extra):
+        raise ConfigError("vote_scout.extra_major_symbols must be a list of token symbols")
+    min_history = block.get("min_history", defaults.min_history)
+    if not isinstance(min_history, int) or isinstance(min_history, bool) or min_history < 0:
+        raise ConfigError("vote_scout.min_history must be a non-negative integer")
+    return ScoutFilters(
+        min_tvl_usd=number("min_tvl_usd", defaults.min_tvl_usd),
+        require_major_pair=require_major,
+        extra_major_symbols=tuple(s.strip() for s in extra),
+        max_vote_cv=number("max_vote_cv", defaults.max_vote_cv),
+        min_fee_share=number("min_fee_share", defaults.min_fee_share, upper=1.0),
+        min_history=min_history,
+        min_token_age_days=number("min_token_age_days", defaults.min_token_age_days),
+    )
 
 
 def _db_path(raw: dict) -> Path:

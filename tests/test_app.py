@@ -63,8 +63,51 @@ def seed(config):
     conn.close()
 
 
-def make_client(config, sync_runner=None):
-    return TestClient(create_app(config, sync_runner=sync_runner))
+def make_client(config, sync_runner=None, scout_runner=None):
+    return TestClient(create_app(config, sync_runner=sync_runner, scout_runner=scout_runner))
+
+
+def make_scout_result(pool_name="CL100-WETH/USDC"):
+    import time as time_module
+
+    from hrusha.service.vote_scout import RawPool, ScoutResult, VeNft, rank
+
+    now = int(time_module.time())
+    epoch_start = now - now % (7 * 24 * 3600)
+    raws = [
+        RawPool(
+            lp="0x" + "a" * 40,
+            name=pool_name,
+            symbols=("WETH", "USDC"),
+            votes=2_000_000.0,
+            fees_usd=9_000.0,
+            incentives_usd=0.0,
+            blind_share=0.0,
+            tvl_usd=5_000_000.0,
+            final_votes=(4_000_000.0, 4_500_000.0, 4_200_000.0),
+        ),
+        RawPool(
+            lp="0x" + "b" * 40,
+            name="vAMM-TRAP/USDC",
+            symbols=("TRAP", "USDC"),
+            votes=1_000.0,
+            fees_usd=5_000.0,
+            incentives_usd=0.0,
+            blind_share=0.0,
+            tvl_usd=1_000.0,  # the $1k trap pool: flagged, never suggested
+            final_votes=(900.0, 1_100.0, 1_000.0),
+        ),
+    ]
+    return ScoutResult(
+        scanned_at=now,
+        epoch_start=epoch_start,
+        cutoff_ts=epoch_start + 7 * 24 * 3600 - 3600,
+        aero_price=0.5,
+        my_power=10_000.0,
+        my_value_usd=5_000.0,
+        venfts=[VeNft(id=7, power=10_000.0, voted_this_epoch=False, wallet_label="main")],
+        pools=rank(raws, 0.5, 10_000.0),
+    )
 
 
 def test_overview_shows_positions_claimables_balances(config):
@@ -167,7 +210,11 @@ def test_cross_site_form_posts_are_rejected(config):
     seed(config)
     client = make_client(config, sync_runner=lambda cfg: "never")
     for origin in ("https://evil.example", "null"):
-        for path, data in (("/tag", {"event_id": 1, "tag": "x"}), ("/refresh", {})):
+        for path, data in (
+            ("/tag", {"event_id": 1, "tag": "x"}),
+            ("/refresh", {}),
+            ("/votes/scan", {}),
+        ):
             response = client.post(
                 path, data=data, headers={"origin": origin}, follow_redirects=False
             )
@@ -276,6 +323,60 @@ def test_sync_failure_is_reported_not_raised(config):
         time.sleep(0.02)
     else:
         raise AssertionError("failure outcome never appeared")
+
+
+def test_votes_page_before_any_scan_invites_one(config):
+    body = make_client(config).get("/votes").text
+    assert "scan pools" in body
+    assert "vote cutoff in" in body
+
+
+def test_votes_scan_renders_suggestions_in_percent_and_flags_traps(config):
+    client = make_client(config, scout_runner=lambda cfg: make_scout_result())
+    assert client.post("/votes/scan", follow_redirects=False).status_code == 303
+    for _ in range(100):  # background thread: wait for the result to land
+        body = client.get("/votes").text
+        if "CL100-WETH/USDC" in body:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("scan result never appeared")
+    assert "%" in body and "APR" in body  # profits in percents
+    assert "veNFT #7" in body and "NOT voted" in body
+    # the $1k trap pool shows in the table with its flag, never as suggested
+    assert "LOW-TVL" in body
+    suggested_section = body.split("All candidates")[0]
+    assert "TRAP" not in suggested_section
+
+
+def test_votes_scan_failure_is_reported_not_raised(config):
+    def broken_scout(cfg):
+        raise RuntimeError("rpc down")
+
+    client = make_client(config, scout_runner=broken_scout)
+    client.post("/votes/scan", follow_redirects=False)
+    for _ in range(100):
+        body = client.get("/votes").text
+        if "scan failed" in body:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("failure outcome never appeared")
+    assert "rpc down" not in body  # exception text may embed the RPC URL/key
+
+
+def test_votes_page_escapes_chain_derived_pool_names(config):
+    client = make_client(
+        config, scout_runner=lambda cfg: make_scout_result(pool_name=SPAM_SYMBOL)
+    )
+    client.post("/votes/scan", follow_redirects=False)
+    for _ in range(100):
+        body = client.get("/votes").text
+        if "scanned" in body:
+            break
+        time.sleep(0.02)
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
 
 
 def test_health(config):

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% set active = 'votes' %}
+{% block title %}votes{% endblock %}
+{% block content %}
+
+<p class="muted">
+  vote cutoff in {{ cutoff_in_seconds // 3600 }}h {{ (cutoff_in_seconds % 3600) // 60 }}m
+  ({{ cutoff_at | when }}) — voting is disabled in the epoch's final hour
+</p>
+
+<p class="muted">
+  gates (vote_scout in config.yaml): TVL ≥ ${{ '{:,.0f}'.format(filters.min_tvl_usd) }} ·
+  majors-only pairs: {{ 'on' if filters.require_major_pair else 'off' }}{%
+  if filters.extra_major_symbols %} (+{{ filters.extra_major_symbols | join(', ') }}){% endif %} ·
+  vote CV ≤ {{ filters.max_vote_cv }} · fee share ≥ {{ '%.0f' % (filters.min_fee_share * 100) }}% ·
+  history ≥ {{ filters.min_history }} epochs{% if filters.min_token_age_days > 0 %} ·
+  token age ≥ {{ '%.0f' % filters.min_token_age_days }}d{% endif %}
+</p>
+
+<form method="post" action="/votes/scan">
+  <button {% if scan_running %}disabled{% endif %}>
+    {% if scan_running %}scanning… (takes ~3 minutes, reload to check){% else %}scan pools{% endif %}
+  </button>
+</form>
+{% if scan_error %}<div class="note warn">{{ scan_error }}</div>{% endif %}
+
+{% if not result %}
+<div class="note">No scan yet this session — press <b>scan pools</b> to rank every alive
+gauge by dilution-adjusted reward per vote.</div>
+{% else %}
+
+{% if scan_stale %}
+<div class="note warn">This scan is from a PREVIOUS epoch — rescan before voting.</div>
+{% endif %}
+
+<p class="muted">
+  scanned {{ result.scanned_at | when }} ·
+  your voting power {{ '{:,.0f}'.format(result.my_power) }} veAERO
+  (≈{{ result.my_value_usd | usd }} at AERO ${{ '%.4f' % result.aero_price }})
+</p>
+
+{% for nft in result.venfts %}
+<span class="pill">{{ nft.wallet_label }} veNFT #{{ nft.id }}: {{ '{:,.0f}'.format(nft.power) }}
+  — {% if nft.voted_this_epoch %}voted ✓{% else %}NOT voted{% endif %}</span>
+{% endfor %}
+
+<h2>Suggested (every risk gate passed)</h2>
+{% if result.suggested %}
+<table>
+  <tr><th></th><th>pool</th><th class="num">%/epoch</th><th class="num">APR</th>
+      <th class="num">your $</th><th class="num">pool pays</th>
+      <th class="num">proj votes (M)</th><th class="num">TVL</th></tr>
+  {% for p in result.suggested[:5] %}
+  <tr>
+    <td class="num">{{ loop.index }}</td>
+    <td><a href="https://basescan.org/address/{{ p.raw.lp | urlencode }}">{{ p.raw.name }}</a></td>
+    <td class="num"><b>{{ '%.3f' % p.my_epoch_pct }}%</b></td>
+    <td class="num"><b>{{ '%.1f' % p.my_apr_pct }}%</b></td>
+    <td class="num">{{ p.my_usd_per_epoch | usd }}</td>
+    <td class="num">{{ p.reward_usd | usd }}</td>
+    <td class="num">{{ '%.2f' % (p.projected_votes / 1000000) }}</td>
+    <td class="num">${{ '{:,.0f}'.format(p.raw.tvl_usd) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">%/epoch and APR are your projected reward against your vote power's value at
+AERO spot; your $ already includes your own votes diluting the pool</p>
+{% else %}
+<div class="note">No pool passed every risk gate this scan — inspect the flagged table below.</div>
+{% endif %}
+
+<h2>All candidates (top {{ result.pools | length }} by rewards)</h2>
+<table>
+  <tr><th>pool</th><th class="num">TVL</th><th class="num">votes (M)</th>
+      <th class="num">proj (M)</th><th class="num">fees</th><th class="num">incentives</th>
+      <th class="num">$/1k votes</th><th class="num">stress</th><th class="num">vAPR</th>
+      <th>flags</th></tr>
+  {% for p in result.pools %}
+  <tr>
+    <td><a href="https://basescan.org/address/{{ p.raw.lp | urlencode }}">{{ p.raw.name }}</a></td>
+    <td class="num">${{ '{:,.0f}'.format(p.raw.tvl_usd) }}</td>
+    <td class="num">{{ '%.2f' % (p.raw.votes / 1000000) }}</td>
+    <td class="num">{{ '%.2f' % (p.projected_votes / 1000000) }}</td>
+    <td class="num">{{ p.raw.fees_usd | usd }}</td>
+    <td class="num">{{ p.raw.incentives_usd | usd }}</td>
+    <td class="num">{{ '%.2f' % p.usd_per_1k }}</td>
+    <td class="num">{{ '%.2f' % p.stress_usd_per_1k }}</td>
+    <td class="num">{{ '%.1f' % p.vapr_pct }}%</td>
+    <td>{% for flag in p.flags %}<span class="pill">{{ flag }}</span> {% endfor %}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">
+  proj = projected final votes: max(votes so far, median of the pool's recent
+  completed epochs) — current votes are not final votes, late voters pile in;
+  stress = $/1k votes if final votes hit 1.15× the historical max;
+  rewards keep accruing until the flip, so everything here is conservative
+</p>
+
+{% endif %}
+{% endblock %}

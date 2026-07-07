@@ -44,6 +44,17 @@ etherscan:
 # optional; defaults to ~/.hrusha/hrusha.db (the container sets /data/hrusha.db)
 # db_path: "~/.hrusha/hrusha.db"
 
+# optional: vote-scout risk gates (dashboard /votes page); defaults shown.
+# docs/examples/pool_filter_lab.py re-derives these from realized epoch data
+# vote_scout:
+#   min_tvl_usd: 300000
+#   require_major_pair: true       # false = exotic pairs may be suggested
+#   extra_major_symbols: []        # e.g. [REI] to trust beyond the builtin set
+#   max_vote_cv: 0.6
+#   min_fee_share: 0.10
+#   min_history: 3
+#   min_token_age_days: 0        # >0 flags pools whose youngest token is newer
+
 # later, for the Sheets export:
 # sheets:
 #   spreadsheet_id: "..."

@@ -52,6 +52,19 @@ class SyncState:
     last_finished_ts: int = 0
 
 
+@dataclass
+class ScoutState:
+    """Vote-scan state, shared across requests, guarded by `lock`.
+
+    The scan is ~3 minutes of chunked eth_calls, so it runs on a
+    background thread like refresh; the page renders the last result."""
+
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    running: bool = False
+    result: object | None = None  # vote_scout.ScoutResult
+    last_error: str = ""
+
+
 def default_sync_runner(config: Config) -> str:
     """Full sync with the production wiring; returns a one-line outcome."""
     # deferred: pulls web3 + providers, which the read-only pages never need
@@ -83,15 +96,25 @@ def default_sync_runner(config: Config) -> str:
     )
 
 
-def create_app(config: Config, sync_runner=None) -> FastAPI:
-    """App factory: explicit wiring, injectable sync for tests."""
+def default_scout_runner(config: Config):
+    """Full Aerodrome vote scan with the production wiring."""
+    # deferred: pulls web3, which the read-only pages never need
+    from hrusha.service import vote_scout
+
+    return vote_scout.scan(config)
+
+
+def create_app(config: Config, sync_runner=None, scout_runner=None) -> FastAPI:
+    """App factory: explicit wiring, injectable sync/scout for tests."""
     app = FastAPI(title="hrusha", docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.filters["usd"] = _fmt_usd
     templates.env.filters["amount"] = _fmt_amount
     templates.env.filters["when"] = _fmt_when
     sync_state = SyncState()
+    scout_state = ScoutState()
     run_sync = sync_runner or default_sync_runner
+    run_scout = scout_runner or default_scout_runner
 
     def page(request: Request, name: str, **context):
         context.update(
@@ -215,6 +238,52 @@ def create_app(config: Config, sync_runner=None) -> FastAPI:
         back = request.headers.get("referer") or "/transfers"
         # 303: re-GET the page after the form post
         return RedirectResponse(_same_origin_path(back), status_code=303)
+
+    @app.get("/votes")
+    def votes(request: Request):
+        now = int(time.time())
+        epoch_start = now - now % SECONDS_PER_WEEK
+        cutoff = epoch_start + SECONDS_PER_WEEK - 3600  # voting disabled the final hour
+        with scout_state.lock:
+            result = scout_state.result
+            scan_running = scout_state.running
+            scan_error = scout_state.last_error
+        return page(
+            request,
+            "votes.html",
+            result=result,
+            filters=config.vote_scout,
+            scan_running=scan_running,
+            scan_error=scan_error,
+            scan_stale=result is not None and result.epoch_start != epoch_start,
+            cutoff_at=cutoff,
+            cutoff_in_seconds=max(0, cutoff - now),
+        )
+
+    @app.post("/votes/scan")
+    def votes_scan(request: Request):
+        _reject_cross_site(request)
+        with scout_state.lock:
+            already_running = scout_state.running
+            if not already_running:
+                scout_state.running = True
+        if not already_running:
+            threading.Thread(target=_run_scout_thread, daemon=True).start()
+        return RedirectResponse("/votes", status_code=303)
+
+    def _run_scout_thread():
+        result, error = None, ""
+        try:
+            result = run_scout(config)
+        except Exception as exc:
+            # class name only: provider exceptions can embed the RPC URL (API key)
+            log.error("vote scan failed", exc_info=exc)
+            error = f"scan failed: {exc.__class__.__name__} (see logs)"
+        with scout_state.lock:
+            scout_state.running = False
+            scout_state.last_error = error
+            if result is not None:
+                scout_state.result = result
 
     @app.post("/refresh")
     def refresh(request: Request):
