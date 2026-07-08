@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% set active = 'invest' %}
+{% block title %}invest{% endblock %}
+{% block content %}
+
+<p class="muted">
+  read-only suggestions for idle capital — every option is shown with its risks,
+  nothing is hidden or auto-filtered. withdrawal-safe means available liquidity
+  covers your balance and there's no slow-exit tag
+</p>
+
+<form method="post" action="/invest/scan">
+  <button {% if scan_running %}disabled{% endif %}>
+    {% if scan_running %}scanning… (a few seconds, reload to check){% else %}scan opportunities{% endif %}
+  </button>
+</form>
+{% if scan_error %}<div class="note warn">{{ scan_error }}</div>{% endif %}
+
+{% if not result %}
+<div class="note">No scan yet this session — press <b>scan opportunities</b> to rank
+where idle ETH / cbBTC / USDC could go.</div>
+{% else %}
+
+{% if not result.liquidity_checked %}
+<div class="note warn">A liquidity data source was unreachable this scan —
+SAFE / not-safe flags may be unreliable. Rescan.</div>
+{% endif %}
+
+<p class="muted">scanned {{ result.scanned_at | when }}</p>
+
+<h2>Idle balances</h2>
+{% if result.balances %}
+<table>
+  <tr><th>token</th><th class="num">amount</th><th class="num">USD value</th></tr>
+  {% for b in result.balances %}
+  <tr>
+    <td>{{ b.token }}</td>
+    <td class="num">{{ '{:,.4f}'.format(b.amount) }}</td>
+    <td class="num">{{ b.usd_value | usd }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="note">No idle balances found across configured wallets.</div>
+{% endif %}
+
+<h2>Best safe option per token</h2>
+{% if result.best_safe_by_token %}
+<table>
+  <tr><th class="num"></th><th>token</th><th>protocol</th><th>mechanism</th>
+      <th class="num">APY</th><th class="num">30d avg</th><th class="num">avail liq</th><th>notes</th><th>link</th></tr>
+  {% for tok, o in result.best_safe_by_token.items() %}
+  <tr>
+    <td class="num">{{ loop.index }}</td>
+    <td>{{ o.raw.token }}</td>
+    <td>{{ o.raw.protocol }}</td>
+    <td>{{ o.raw.mechanism }}</td>
+    <td class="num"><b>{{ '%.2f' % o.raw.supply_apy_pct }}%</b></td>
+    <td class="num">{% if o.raw.apy_30d_pct is not none %}{{ '%.2f' % o.raw.apy_30d_pct }}%{% else %}—{% endif %}</td>
+    <td class="num">{% if o.raw.available_liquidity_usd is not none
+      %}${{ '{:,.0f}'.format(o.raw.available_liquidity_usd) }}{% else %}—{% endif %}</td>
+    <td>{% for note in o.notes %}<span class="pill muted">{{ note }}</span> {% endfor %}</td>
+    <td>{% if o.raw.pool_url %}<a href="{{ o.raw.pool_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<div class="note">No withdrawal-safe option found this scan — inspect the full table below.</div>
+{% endif %}
+
+<h2>All opportunities ({{ result.opportunities | length }})</h2>
+{% if result.opportunities %}
+<table>
+  <tr><th>protocol</th><th>mechanism</th><th>token</th>
+      <th class="num">APY</th><th class="num">30d avg</th><th class="num">avail liq</th>
+      <th class="num">total supply</th><th class="num">util</th>
+      <th>safe?</th><th>risk tags</th><th>link</th></tr>
+  {% for o in result.opportunities %}
+  <tr>
+    <td>{{ o.raw.protocol }}</td>
+    <td>{{ o.raw.mechanism }}</td>
+    <td>{{ o.raw.token }}</td>
+    <td class="num">{{ '%.2f' % o.raw.supply_apy_pct }}%</td>
+    <td class="num">{% if o.raw.apy_30d_pct is not none %}{{ '%.2f' % o.raw.apy_30d_pct }}%{% else %}—{% endif %}</td>
+    <td class="num">{% if o.raw.available_liquidity_usd is not none
+      %}${{ '{:,.0f}'.format(o.raw.available_liquidity_usd) }}{% else %}—{% endif %}</td>
+    <td class="num">{% if o.raw.total_supply_usd is not none
+      %}${{ '{:,.0f}'.format(o.raw.total_supply_usd) }}{% else %}—{% endif %}</td>
+    <td class="num">{% if o.raw.utilization is not none
+      %}{{ '%.0f' % (o.raw.utilization * 100) }}%{% else %}—{% endif %}</td>
+    <td>{% if o.withdrawal_safe %}✓ safe{% else %}<b>no</b>{% endif %}</td>
+    <td>{% for tag in o.risk_tags %}<span class="pill">{{ tag }}</span> {% endfor
+      %}{% for note in o.notes %}<span class="pill muted">{{ note }}</span> {% endfor %}</td>
+    <td>{% if o.raw.pool_url %}<a href="{{ o.raw.pool_url }}" target="_blank" rel="noopener">open ↗</a>{% else %}—{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">
+  ranked best APY first; risk tags are transparent — a tagged option is not
+  automatically excluded, the call is yours
+</p>
+{% else %}
+<div class="note">No opportunities returned this scan.</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

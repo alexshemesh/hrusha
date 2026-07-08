@@ -34,6 +34,7 @@ from hrusha.ledger import reports
 from hrusha.ledger import tags as tags_module
 from hrusha.ledger.store import open_ledger
 from hrusha.ledger.tags import SECONDS_PER_WEEK
+from hrusha.providers.alchemy_rpc import AlchemyProvider
 
 log = logging.getLogger("hrusha.app")
 
@@ -62,6 +63,19 @@ class ScoutState:
     lock: threading.Lock = field(default_factory=threading.Lock)
     running: bool = False
     result: object | None = None  # vote_scout.ScoutResult
+    last_error: str = ""
+
+
+@dataclass
+class InvestState:
+    """Invest-scan state, shared across requests, guarded by `lock`.
+
+    The scan is a few seconds of HTTP (DefiLlama + balances), but it runs
+    on a background thread like votes/refresh so the page never blocks."""
+
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    running: bool = False
+    result: object | None = None  # invest_scout.InvestResult
     last_error: str = ""
 
 
@@ -104,7 +118,17 @@ def default_scout_runner(config: Config):
     return vote_scout.scan(config)
 
 
-def create_app(config: Config, sync_runner=None, scout_runner=None) -> FastAPI:
+def default_invest_runner(config: Config):
+    """Read-only invest scan with the production wiring."""
+    from hrusha.providers.aave import DefiLlamaInvestScanner
+    from hrusha.service.invest_scout import aggregate_balances, scan
+
+    provider = AlchemyProvider(config.alchemy_api_key)
+    balances = aggregate_balances(provider.balances(config.addresses))
+    return scan(balances, DefiLlamaInvestScanner())
+
+
+def create_app(config: Config, sync_runner=None, scout_runner=None, invest_runner=None) -> FastAPI:
     """App factory: explicit wiring, injectable sync/scout for tests."""
     app = FastAPI(title="hrusha", docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -113,8 +137,10 @@ def create_app(config: Config, sync_runner=None, scout_runner=None) -> FastAPI:
     templates.env.filters["when"] = _fmt_when
     sync_state = SyncState()
     scout_state = ScoutState()
+    invest_state = InvestState()
     run_sync = sync_runner or default_sync_runner
     run_scout = scout_runner or default_scout_runner
+    run_invest = invest_runner or default_invest_runner
 
     def page(request: Request, name: str, **context):
         context.update(
@@ -270,6 +296,44 @@ def create_app(config: Config, sync_runner=None, scout_runner=None) -> FastAPI:
         if not already_running:
             threading.Thread(target=_run_scout_thread, daemon=True).start()
         return RedirectResponse("/votes", status_code=303)
+
+    @app.get("/invest")
+    def invest(request: Request):
+        with invest_state.lock:
+            result = invest_state.result
+            scan_running = invest_state.running
+            scan_error = invest_state.last_error
+        return page(
+            request,
+            "invest.html",
+            result=result,
+            scan_running=scan_running,
+            scan_error=scan_error,
+        )
+
+    @app.post("/invest/scan")
+    def invest_scan(request: Request):
+        _reject_cross_site(request)
+        with invest_state.lock:
+            already_running = invest_state.running
+            if not already_running:
+                invest_state.running = True
+        if not already_running:
+            threading.Thread(target=_run_invest_thread, daemon=True).start()
+        return RedirectResponse("/invest", status_code=303)
+
+    def _run_invest_thread():
+        result, error = None, ""
+        try:
+            result = run_invest(config)
+        except Exception as exc:
+            log.error("invest scan failed", exc_info=exc)
+            error = f"scan failed: {exc.__class__.__name__} (see logs)"
+        with invest_state.lock:
+            invest_state.running = False
+            invest_state.last_error = error
+            if result is not None:
+                invest_state.result = result
 
     def _run_scout_thread():
         result, error = None, ""

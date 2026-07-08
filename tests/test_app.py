@@ -63,8 +63,15 @@ def seed(config):
     conn.close()
 
 
-def make_client(config, sync_runner=None, scout_runner=None):
-    return TestClient(create_app(config, sync_runner=sync_runner, scout_runner=scout_runner))
+def make_client(config, sync_runner=None, scout_runner=None, invest_runner=None):
+    return TestClient(
+        create_app(
+            config,
+            sync_runner=sync_runner,
+            scout_runner=scout_runner,
+            invest_runner=invest_runner,
+        )
+    )
 
 
 def make_scout_result(pool_name="CL100-WETH/USDC"):
@@ -375,6 +382,114 @@ def test_votes_page_escapes_chain_derived_pool_names(config):
         time.sleep(0.02)
     assert "<script>" not in body
     assert "&lt;script&gt;" in body
+
+
+def make_invest_result(*, liquidity_checked=True):
+    from hrusha.service.invest_scout import (
+        IdleBalance,
+        InvestResult,
+        OpportunityScore,
+        RawOpportunity,
+    )
+
+    return InvestResult(
+        scanned_at=int(time.time()),
+        balances=[
+            IdleBalance(token="USDC", amount=393.33, usd_value=393.33),
+            IdleBalance(token="ETH", amount=0.0002, usd_value=0.06),
+            IdleBalance(token="cbBTC", amount=0.00002, usd_value=2.47),
+        ],
+        opportunities=[
+            OpportunityScore(
+                raw=RawOpportunity(
+                    protocol="aerodrome-slipstream",
+                    mechanism="stable-lp",
+                    token="USDC",
+                    supply_apy_pct=49.15,
+                    available_liquidity_usd=12_000_000.0,
+                    total_supply_usd=20_000_000.0,
+                ),
+                risk_tags=("il-risk", "slipstream-concentrated", "utilization-not-checked"),
+                withdrawal_safe=True,
+                notes=("best safe APY for USDC",),
+            ),
+            OpportunityScore(
+                raw=RawOpportunity(
+                    protocol="aave-v3",
+                    mechanism="lending",
+                    token="USDC",
+                    supply_apy_pct=4.0,
+                    available_liquidity_usd=500_000_000.0,
+                    total_supply_usd=600_000_000.0,
+                    utilization=0.85,
+                ),
+                risk_tags=("aave-utilization-high",),
+                withdrawal_safe=True,
+            ),
+            OpportunityScore(
+                raw=RawOpportunity(
+                    protocol="morpho",
+                    mechanism="lending-vault",
+                    token="USDC",
+                    supply_apy_pct=0.0,
+                    available_liquidity_usd=1_000_000.0,
+                ),
+                risk_tags=("zero-apy",),
+                withdrawal_safe=False,
+            ),
+        ],
+        liquidity_checked=liquidity_checked,
+    )
+
+
+def test_invest_scan_renders_idle_balances_and_risk_tags(config):
+    client = make_client(config, invest_runner=lambda cfg: make_invest_result())
+    assert client.post("/invest/scan", follow_redirects=False).status_code == 303
+    for _ in range(100):
+        body = client.get("/invest").text
+        if "USDC" in body and "Idle balances" in body:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("invest scan result never appeared")
+    # idle balances rendered
+    assert "USDC" in body and "393.33" in body
+    # best safe option shows the high-APY aerodrome pick, not the 0% morpho one
+    best = body.split("All opportunities")[0]
+    assert "aerodrome-slipstream" in best and "49.15" in best
+    assert "morpho" not in best
+    # full table shows every option, nothing hidden — even the 0% / not-safe ones
+    assert "morpho" in body and "zero-apy" in body
+    assert "il-risk" in body and "utilization-not-checked" in body
+
+
+def test_invest_scan_failure_is_reported_not_raised(config):
+    def broken_invest(cfg):
+        raise RuntimeError("defillama down")
+
+    client = make_client(config, invest_runner=broken_invest)
+    client.post("/invest/scan", follow_redirects=False)
+    for _ in range(100):
+        body = client.get("/invest").text
+        if "scan failed" in body:
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("failure outcome never appeared")
+    assert "defillama down" not in body  # exception text not leaked to the page
+
+
+def test_invest_page_warns_when_liquidity_source_unreachable(config):
+    client = make_client(
+        config, invest_runner=lambda cfg: make_invest_result(liquidity_checked=False)
+    )
+    client.post("/invest/scan", follow_redirects=False)
+    for _ in range(100):
+        body = client.get("/invest").text
+        if "liquidity data source" in body:
+            break
+        time.sleep(0.02)
+    assert "unreachable" in body
 
 
 def test_health(config):
