@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
-# Blocks commits containing secrets or raw wallet addresses.
+# Pre-commit gate: ruff lint/format + gitleaks secret scan.
 # Installed into .git/hooks by `make hooks`. Uses .gitleaks.toml at repo root.
 set -euo pipefail
 
+# ---- ruff (lint + format) ----
+# Auto-activate the project venv so ruff is on PATH.
+if [ -z "${VIRTUAL_ENV:-}" ] && [ -f "$(git rev-parse --show-toplevel)/.venv/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    . "$(git rev-parse --show-toplevel)/.venv/bin/activate"
+fi
+
+if ! command -v ruff >/dev/null 2>&1; then
+    echo "pre-commit: ruff is not installed (run: make venv && source .venv/bin/activate)" >&2
+    exit 1
+fi
+
+echo "pre-commit: ruff check"
+ruff check .
+
+echo "pre-commit: ruff format --check"
+ruff format --check .
+
+# ---- gitleaks (secret scan) ----
 if ! command -v gitleaks >/dev/null 2>&1; then
     echo "pre-commit: gitleaks is not installed (brew install gitleaks)" >&2
     echo "pre-commit: refusing to commit without a leak scan" >&2
     exit 1
 fi
 
+echo "pre-commit: gitleaks"
 exec gitleaks git --pre-commit --staged --redact --verbose
