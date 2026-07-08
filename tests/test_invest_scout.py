@@ -80,8 +80,8 @@ def test_utilization_not_checked_tagged_when_none():
     raw = _raw(util=None)
     tags, safe, notes = tag_risks(raw, balance_usd=1000)
     assert "utilization-not-checked" in tags
-    # Not blocking — still safe (just unverified)
-    assert safe is True
+    # Unverified liquidity blocks safety — cannot promote as "best safe"
+    assert safe is False
     assert any("utilization not verified" in n for n in notes)
 
 
@@ -321,3 +321,61 @@ def test_rank_uses_30d_avg_not_spot_apy():
     result = scan([IdleBalance(token="USDC", amount=100, usd_value=100)], FakeScanner(raws))
     # pool B should rank first (higher 30d avg = 8% vs 5%)
     assert result.opportunities[0].raw.protocol == "b"
+
+
+# -- P1/P2 review fixes --------------------------------------------------------
+
+
+def test_wbtc_is_not_mapped_to_cbbtc():
+    from hrusha.providers.aave import _map_token
+
+    # WBTC is a distinct asset from cbBTC — must not map to cbBTC
+    assert _map_token("WBTC") != "cbBTC"
+    assert _map_token("WBTC-USDC") != "cbBTC"
+    # cbBTC still maps correctly (use a cbBTC-ETH pair, not cbBTC-USDC which maps to USDC first)
+    assert _map_token("CBBTC") == "cbBTC"
+    assert _map_token("CBBTC-ETH") == "cbBTC"
+
+
+def test_scanner_error_sets_liquidity_checked_false():
+    class FailingScanner:
+        def fetch_opportunities(self):
+            raise RuntimeError("network down")
+
+    result = scan([IdleBalance(token="USDC", amount=100, usd_value=100)], FailingScanner())
+    assert result.liquidity_checked is False
+    assert result.opportunities == []
+
+
+def test_unverified_utilization_excluded_from_best_safe():
+    # Lending pool with unknown utilization — should NOT be in best_safe
+    raws = [
+        RawOpportunity(
+            protocol="aave-v3",
+            mechanism="lending",
+            token="USDC",
+            supply_apy_pct=5.0,
+            available_liquidity_usd=None,
+            utilization=None,
+        ),
+    ]
+    result = scan([IdleBalance(token="USDC", amount=100, usd_value=100)], FakeScanner(raws))
+    assert "USDC" not in result.best_safe_by_token
+    assert result.opportunities[0].withdrawal_safe is False
+
+
+def test_verified_low_utilization_is_safe():
+    # Lending pool with known, low utilization — should be safe
+    raws = [
+        RawOpportunity(
+            protocol="aave-v3",
+            mechanism="lending",
+            token="USDC",
+            supply_apy_pct=5.0,
+            available_liquidity_usd=10_000_000.0,
+            utilization=0.50,
+        ),
+    ]
+    result = scan([IdleBalance(token="USDC", amount=100, usd_value=100)], FakeScanner(raws))
+    assert "USDC" in result.best_safe_by_token
+    assert result.opportunities[0].withdrawal_safe is True

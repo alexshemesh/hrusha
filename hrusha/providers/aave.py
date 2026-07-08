@@ -8,15 +8,21 @@ The scanner produces ``RawOpportunity`` objects for the pure scorer in
 ``hrusha.service.invest_scout``.  Chain I/O only — no scoring logic here.
 
 Withdrawal safety note: DefiLlama TVL is total supplied, not
-available liquidity.  For lending, TVL >= available liquidity always
-(available = TVL - borrowed).  We use TVL as a conservative proxy and
-tag ``utilization-not-checked`` so the operator knows the on-chain
-utilization check is not yet wired.
+available liquidity.  We do NOT set available_liquidity_usd for
+lending pools (it would be a false claim).  Utilization is unknown
+from DefiLlama, so ``utilization-not-checked`` is tagged and the
+scorer blocks such entries from "best safe" until real on-chain
+utilization data is wired.
 """
 
 from __future__ import annotations
 
 import httpx
+
+
+class ScannerError(Exception):
+    """Raised when the underlying data source is unreachable or returns invalid data."""
+
 
 # Tokens we track
 TARGET_TOKENS = {"USDC", "WETH", "ETH", "CBBTC", "CBTC", "CBETH", "WSTETH", "STETH"}
@@ -69,7 +75,7 @@ def _map_token(symbol: str) -> str | None:
         return None  # excluded — user wants ETH, cbBTC, USDC only
     if "USDC" in s:
         return "USDC"
-    if "CBBTC" in s or "WBTC" in s:
+    if "CBBTC" in s:
         return "cbBTC"
     if "WSTETH" in s or "STETH" in s or "WETH" in s:
         return "ETH"
@@ -93,10 +99,13 @@ class DefiLlamaInvestScanner:
         try:
             resp = httpx.get(YIELDS_URL, timeout=self._timeout)
             resp.raise_for_status()
-        except Exception:
-            return []
+        except Exception as exc:
+            raise ScannerError(f"DefiLlama yields API unreachable: {exc}") from exc
 
-        data = resp.json().get("data", [])
+        try:
+            data = resp.json().get("data", [])
+        except Exception as exc:
+            raise ScannerError(f"DefiLlama yields API returned invalid JSON: {exc}") from exc
         opps: list[RawOpportunity] = []
 
         for pool in data:
@@ -176,7 +185,7 @@ class DefiLlamaInvestScanner:
                     mechanism=mechanism,
                     token=token,
                     supply_apy_pct=float(apy),
-                    available_liquidity_usd=float(tvl),  # conservative proxy
+                    available_liquidity_usd=None,  # unknown from DefiLlama (TVL ≠ withdrawable)
                     total_supply_usd=float(tvl),
                     utilization=None,  # not available from DefiLlama
                     quirk_notes=quirk_notes,

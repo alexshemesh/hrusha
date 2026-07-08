@@ -195,7 +195,10 @@ def tag_risks(
     has_slow_tag = bool(SLOW_WITHDRAWAL_TAGS & set(tags))
     has_liquidity_problem = "liquidity-low" in tags
     has_utilization_problem = "utilization-high" in tags
-    withdrawal_safe = not (has_slow_tag or has_liquidity_problem or has_utilization_problem)
+    has_unverified_liquidity = "utilization-not-checked" in tags or "liquidity-not-checked" in tags
+    withdrawal_safe = not (
+        has_slow_tag or has_liquidity_problem or has_utilization_problem or has_unverified_liquidity
+    )
 
     return tuple(tags), withdrawal_safe, tuple(notes)
 
@@ -285,12 +288,23 @@ def scan(
     """
     import time
 
-    raws = scanner.fetch_opportunities()
+    liquidity_checked = True
+    try:
+        raws = scanner.fetch_opportunities()
+    except Exception:
+        # Provider unreachable — mark data as unverified, return empty result
+        return InvestResult(
+            scanned_at=int(time.time()),
+            balances=balances,
+            opportunities=[],
+            liquidity_checked=False,
+        )
     scored = rank(raws, balances)
     return InvestResult(
         scanned_at=int(time.time()),
         balances=balances,
         opportunities=scored,
+        liquidity_checked=liquidity_checked,
     )
 
 
