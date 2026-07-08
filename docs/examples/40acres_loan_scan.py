@@ -12,9 +12,11 @@ whereas Alchemy's free tier caps eth_getLogs at 10 blocks), then reports:
 
 Run:  python docs/examples/40acres_loan_scan.py
 """
+
 import concurrent.futures
 import datetime
 import json
+import tempfile
 import time
 
 import requests
@@ -36,7 +38,11 @@ OUTSTANDING_SEL = Web3.keccak(text="_outstandingCapital()")[:4].hex()
 
 
 def rpc_call(method, params):
-    r = requests.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=30)
+    r = requests.post(
+        RPC,
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        timeout=30,
+    )
     d = r.json()
     if "error" in d:
         raise RuntimeError(d["error"])
@@ -45,9 +51,17 @@ def rpc_call(method, params):
 
 def fetch_chunk(from_block, to_block):
     payload = {
-        "jsonrpc": "2.0", "id": 1, "method": "eth_getLogs",
-        "params": [{"fromBlock": hex(from_block), "toBlock": hex(to_block),
-                    "address": LOAN, "topics": [[T0_BORROW, T0_PAID]]}],
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "eth_getLogs",
+        "params": [
+            {
+                "fromBlock": hex(from_block),
+                "toBlock": hex(to_block),
+                "address": LOAN,
+                "topics": [[T0_BORROW, T0_PAID]],
+            }
+        ],
     }
     for attempt in range(3):
         try:
@@ -65,8 +79,16 @@ def fetch_chunk(from_block, to_block):
 
 
 def eth_call(to, data):
-    r = requests.post(RPC, json={"jsonrpc": "2.0", "id": 1, "method": "eth_call",
-                                  "params": [{"to": to, "data": data}, "latest"]}, timeout=20)
+    r = requests.post(
+        RPC,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_call",
+            "params": [{"to": to, "data": data}, "latest"],
+        },
+        timeout=20,
+    )
     d = r.json()
     return d.get("result", "0x")
 
@@ -96,11 +118,13 @@ def main():
             all_logs.extend(f.result())
             done += 1
             if done % 200 == 0:
-                print(f"  {done}/{len(chunks)} chunks, {len(all_logs)} logs, {time.time()-t0:.0f}s")
-    print(f"scanned {len(all_logs)} logs in {time.time()-t0:.0f}s")
+                print(
+                    f"  {done}/{len(chunks)} chunks, {len(all_logs)} logs, {time.time() - t0:.0f}s"
+                )
+    print(f"scanned {len(all_logs)} logs in {time.time() - t0:.0f}s")
 
     borrowed = {}  # id -> (block, amount, ts)
-    paid = {}      # id -> (block, ts)
+    paid = {}  # id -> (block, ts)
     for lg in all_logs:
         t = lg["topics"][0].lower()
         d = lg["data"]
@@ -131,7 +155,7 @@ def main():
         if res == "0x" or len(res) < 2 + 32 * 8:
             continue
         rb = bytes.fromhex(res[2:])
-        words = [int.from_bytes(rb[k:k+32], "big") for k in range(0, len(rb), 32)]
+        words = [int.from_bytes(rb[k : k + 32], "big") for k in range(0, len(rb), 32)]
         active_details[lid] = words
 
     print(f"\ngot details for {len(active_details)} active loans")
@@ -146,9 +170,9 @@ def main():
             if 1_000_000_000 < v < 2_000_000_000:
                 tag = f"  <-- unix ts? {datetime.datetime.utcfromtimestamp(v)}"
             elif v != 0 and v < 2**160 and len(hex(v)) == 42:
-                tag = f"  <-- addr? {Web3.to_checksum_address('0x'+hex(v)[2:].rjust(40,'0'))}"
+                tag = f"  <-- addr? {Web3.to_checksum_address('0x' + hex(v)[2:].rjust(40, '0'))}"
             elif v < 10**18 and v > 10**12:
-                tag = f"  <-- usdc amt? ${v/1e6:,.2f}"
+                tag = f"  <-- usdc amt? ${v / 1e6:,.2f}"
             print(f"  [{i:2d}] {v}{tag}")
 
     # Save raw data
@@ -158,18 +182,19 @@ def main():
         "active_ids": active_ids,
         "active_details": {str(k): v for k, v in active_details.items()},
     }
-    with open("/tmp/hrusha_loans.json", "w") as f:
+    out_path = f"{tempfile.gettempdir()}/hrusha_loans.json"
+    with open(out_path, "w") as f:
         json.dump(out, f, indent=1)
-    print("\nsaved /tmp/hrusha_loans.json")
+    print(f"\nsaved {out_path}")
 
     # Totals
     outstanding = int(eth_call(LOAN, "0x" + OUTSTANDING_SEL), 16)
-    print(f"\n_outstandingCapital: ${outstanding/1e6:,.2f}")
+    print(f"\n_outstandingCapital: ${outstanding / 1e6:,.2f}")
     # vault idle USDC
     usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
     bal_sel = Web3.keccak(text="balanceOf(address)")[:4].hex() + u256(int(VAULT, 16)).hex()
     idle = int(eth_call(usdc, "0x" + bal_sel), 16)
-    print(f"vault idle USDC: ${idle/1e6:,.2f}")
+    print(f"vault idle USDC: ${idle / 1e6:,.2f}")
 
 
 if __name__ == "__main__":

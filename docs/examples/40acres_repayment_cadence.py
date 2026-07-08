@@ -9,9 +9,11 @@ repayments are being re-lent straight back out.
 
 Run:  python docs/examples/40acres_repayment_cadence.py
 """
+
 import concurrent.futures
 import datetime
 import json
+import tempfile
 import time
 
 import requests
@@ -35,7 +37,11 @@ DEPLOY = 25712608
 def rpc(url, method, params):
     for _ in range(3):
         try:
-            r = requests.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=30)
+            r = requests.post(
+                url,
+                json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+                timeout=30,
+            )
             if r.status_code == 200 and r.text.strip().startswith("{"):
                 d = r.json()
                 if "error" in d:
@@ -48,7 +54,12 @@ def rpc(url, method, params):
 
 
 def fetch_chunk(fb, tb):
-    payload = {"fromBlock": hex(fb), "toBlock": hex(tb), "address": LOAN, "topics": [[T0_BORROW, T0_PAID]]}
+    payload = {
+        "fromBlock": hex(fb),
+        "toBlock": hex(tb),
+        "address": LOAN,
+        "topics": [[T0_BORROW, T0_PAID]],
+    }
     res = rpc(PUBLIC, "eth_getLogs", [payload])
     return res or []
 
@@ -75,10 +86,10 @@ def main():
         futs = [ex.submit(fetch_chunk, fb, tb) for fb, tb in chunks]
         for f in concurrent.futures.as_completed(futs):
             all_logs.extend(f.result())
-    print(f"  {len(all_logs)} logs in {time.time()-t0:.0f}s")
+    print(f"  {len(all_logs)} logs in {time.time() - t0:.0f}s")
 
-    borrows = []   # (block, loanId, amount)
-    pays = []      # (block, loanId, amount, bool_flag)
+    borrows = []  # (block, loanId, amount)
+    pays = []  # (block, loanId, amount, bool_flag)
     for lg in all_logs:
         t = lg["topics"][0].lower()
         d = lg["data"][2:] if lg["data"].startswith("0x") else lg["data"]
@@ -100,32 +111,47 @@ def main():
     calib_blocks = [DEPLOY, (DEPLOY + cur) // 4, (DEPLOY + cur) // 2, cur]
     calib = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {ex.submit(lambda b: (b, int(rpc(PUBLIC, "eth_getBlockByNumber", [hex(b), False])["timestamp"], 16)), b): b for b in calib_blocks}
+        futs = {
+            ex.submit(
+                lambda b: (
+                    b,
+                    int(rpc(PUBLIC, "eth_getBlockByNumber", [hex(b), False])["timestamp"], 16),
+                ),
+                b,
+            )
+            for b in calib_blocks
+        }
         for f in concurrent.futures.as_completed(futs):
-            b, ts = f.result(); calib[b] = ts
+            b, ts = f.result()
+            calib[b] = ts
     calib_pts = sorted(calib.items())
-    print("calibration points:", [(b, datetime.datetime.utcfromtimestamp(ts)) for b, ts in calib_pts])
+    print(
+        "calibration points:",
+        [(b, datetime.datetime.utcfromtimestamp(ts)) for b, ts in calib_pts],
+    )
 
     def approx_ts(blk):
         # piecewise linear interpolation
         for i in range(len(calib_pts) - 1):
-            b0, t0 = calib_pts[i]; b1, t1 = calib_pts[i+1]
+            b0, t0 = calib_pts[i]
+            b1, t1 = calib_pts[i + 1]
             if b0 <= blk <= b1:
-                if b1 == b0: return t0
+                if b1 == b0:
+                    return t0
                 return int(t0 + (blk - b0) * (t1 - t0) / (b1 - b0))
         b0, t0 = calib_pts[0]
-        if blk < b0: return t0 - (b0 - blk) * 2
+        if blk < b0:
+            return t0 - (b0 - blk) * 2
         b1, t1 = calib_pts[-1]
         return int(t1 + (blk - b1) * 2)
-
-    ts_cache = {}  # not needed per-block now, but keep interface
 
     # ---- weekly repayment schedule ----
     # bucket pays by ISO week
     from collections import defaultdict
+
     weekly = defaultdict(lambda: [0, 0.0])  # week -> [count, usd]
     daily = defaultdict(lambda: [0, 0.0])
-    for blk, lid, amt, flag in pays:
+    for blk, _lid, amt, _flag in pays:
         ts = approx_ts(blk)
         if not ts:
             continue
@@ -152,16 +178,26 @@ def main():
     # ---- vault state ----
     print("\n=== vault / loan state ===")
     totalAssets = int(eth_call(VAULT, "0x" + Web3.keccak(text="totalAssets()")[:4].hex()), 16)
-    idle = int(eth_call(USDC, "0x" + Web3.keccak(text="balanceOf(address)")[:4].hex() + int(VAULT, 16).to_bytes(32, "big").hex()), 16)
-    outstanding = int(eth_call(LOAN, "0x" + Web3.keccak(text="_outstandingCapital()")[:4].hex()), 16)
-    print(f"  totalAssets       ${totalAssets/1e6:,.2f}")
-    print(f"  vault idle USDC   ${idle/1e6:,.2f}")
-    print(f"  outstanding loans ${outstanding/1e6:,.2f}")
-    print(f"  utilization       {(outstanding/(totalAssets or 1))*100:.2f}%")
+    idle = int(
+        eth_call(
+            USDC,
+            "0x"
+            + Web3.keccak(text="balanceOf(address)")[:4].hex()
+            + int(VAULT, 16).to_bytes(32, "big").hex(),
+        ),
+        16,
+    )
+    outstanding = int(
+        eth_call(LOAN, "0x" + Web3.keccak(text="_outstandingCapital()")[:4].hex()), 16
+    )
+    print(f"  totalAssets       ${totalAssets / 1e6:,.2f}")
+    print(f"  vault idle USDC   ${idle / 1e6:,.2f}")
+    print(f"  outstanding loans ${outstanding / 1e6:,.2f}")
+    print(f"  utilization       {(outstanding / (totalAssets or 1)) * 100:.2f}%")
 
     # ---- borrow cadence last ~9 days (is re-borrowing immediate?) ----
     rb_daily = defaultdict(float)
-    for blk, lid, amt in borrows:
+    for blk, _lid, amt in borrows:
         if blk > cur - 400000:
             ts = approx_ts(blk)
             rb_daily[datetime.datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")] += amt / 1e6
@@ -170,12 +206,19 @@ def main():
         print(f"  {d}  ${rb_daily[d]:>10,.2f}")
 
     # save
-    json.dump({
-        "weekly": {k: v for k, v in weekly.items()},
-        "daily_recent": {k: v for k, v in daily.items()},
-        "totalAssets": totalAssets, "idle": idle, "outstanding": outstanding,
-        "n_borrows": len(borrows), "n_pays": len(pays),
-    }, open("/tmp/hrusha_cadence.json", "w"), indent=1)
+    json.dump(
+        {
+            "weekly": {k: v for k, v in weekly.items()},
+            "daily_recent": {k: v for k, v in daily.items()},
+            "totalAssets": totalAssets,
+            "idle": idle,
+            "outstanding": outstanding,
+            "n_borrows": len(borrows),
+            "n_pays": len(pays),
+        },
+        open(f"{tempfile.gettempdir()}/hrusha_cadence.json", "w"),
+        indent=1,
+    )
 
 
 if __name__ == "__main__":
