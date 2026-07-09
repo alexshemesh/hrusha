@@ -104,7 +104,7 @@ def run_command(args: argparse.Namespace, config: Config) -> int:
     if args.command == "rules":
         return run_rules(config, action=args.action, path=args.path)
     if args.command == "serve":
-        return run_serve(config, host=args.host, port=args.port)
+        return run_serve(config, host=args.host, port=args.port, auto_sync=not args.no_auto_sync)
     if args.command == "invest":
         return run_invest(config)
     raise AssertionError(f"unhandled command: {args.command}")
@@ -183,6 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="bind address (default 127.0.0.1; the app has no auth — do not expose it)",
     )
     serve.add_argument("--port", type=int, default=8787, help="port (default 8787)")
+    serve.add_argument(
+        "--no-auto-sync",
+        action="store_true",
+        help="disable the background sync scheduler (hourly + epoch-flip cadence)",
+    )
 
     subparsers.add_parser(
         "invest",
@@ -473,7 +478,7 @@ def run_rules(config: Config, action: str, path: str | None) -> int:
     return EXIT_OK
 
 
-def run_serve(config: Config, host: str, port: int) -> int:
+def run_serve(config: Config, host: str, port: int, auto_sync: bool = True) -> int:
     import uvicorn  # deferred: only the dashboard needs an ASGI server
 
     from hrusha.service.app import create_app
@@ -485,7 +490,8 @@ def run_serve(config: Config, host: str, port: int) -> int:
             file=sys.stderr,
         )
     print(f"dashboard: http://{host}:{port}/")
-    uvicorn.run(create_app(config), host=host, port=port, log_config=None)
+    app = create_app(config, start_scheduler=auto_sync)
+    uvicorn.run(app, host=host, port=port, log_config=None)
     return EXIT_OK
 
 

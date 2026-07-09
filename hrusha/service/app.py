@@ -128,8 +128,17 @@ def default_invest_runner(config: Config):
     return scan(balances, DefiLlamaInvestScanner())
 
 
-def create_app(config: Config, sync_runner=None, scout_runner=None, invest_runner=None) -> FastAPI:
-    """App factory: explicit wiring, injectable sync/scout for tests."""
+def create_app(
+    config: Config,
+    sync_runner=None,
+    scout_runner=None,
+    invest_runner=None,
+    start_scheduler: bool = False,
+) -> FastAPI:
+    """App factory: explicit wiring, injectable sync/scout/invest for tests.
+
+    `start_scheduler=True` (what `hrusha serve` passes) runs the
+    background sync cadence; tests and one-off tooling leave it off."""
     app = FastAPI(title="hrusha", docs_url=None, redoc_url=None, openapi_url=None)
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.filters["usd"] = _fmt_usd
@@ -142,10 +151,41 @@ def create_app(config: Config, sync_runner=None, scout_runner=None, invest_runne
     run_scout = scout_runner or default_scout_runner
     run_invest = invest_runner or default_invest_runner
 
+    def run_sync_once() -> bool:
+        """Guarded one-at-a-time sync shared by the refresh button and the
+        scheduler. Returns False only on a real failure — a busy skip is
+        True so the scheduler doesn't count it as an outage. Never raises."""
+        with sync_state.lock:
+            if sync_state.running:
+                log.info("sync already running; skipping this trigger")
+                return True
+            sync_state.running = True
+        ok = True
+        try:
+            outcome = run_sync(config)
+        except Exception as exc:
+            log.error("sync failed", exc_info=exc)
+            outcome = f"sync failed: {exc.__class__.__name__} (see logs)"
+            ok = False
+        with sync_state.lock:
+            sync_state.running = False
+            sync_state.last_outcome = outcome
+            sync_state.last_finished_ts = int(time.time())
+        return ok
+
+    scheduler = None
+    if start_scheduler:
+        from hrusha.service.scheduler import SyncScheduler
+
+        scheduler = SyncScheduler(run_sync_once)
+        app.add_event_handler("startup", scheduler.start)
+        app.add_event_handler("shutdown", scheduler.stop)
+
     def page(request: Request, name: str, **context):
         context.update(
             sync_running=sync_state.running,
             sync_outcome=sync_state.last_outcome,
+            auto_sync_at=scheduler.next_run_ts if scheduler else None,
         )
         return templates.TemplateResponse(request, name, context)
 
@@ -352,24 +392,8 @@ def create_app(config: Config, sync_runner=None, scout_runner=None, invest_runne
     @app.post("/refresh")
     def refresh(request: Request):
         _reject_cross_site(request)
-        with sync_state.lock:
-            already_running = sync_state.running
-            if not already_running:
-                sync_state.running = True
-        if not already_running:
-            threading.Thread(target=_run_sync_thread, daemon=True).start()
+        threading.Thread(target=run_sync_once, daemon=True).start()
         return RedirectResponse("/", status_code=303)
-
-    def _run_sync_thread():
-        try:
-            outcome = run_sync(config)
-        except Exception as exc:
-            log.error("dashboard-triggered sync failed", exc_info=exc)
-            outcome = f"sync failed: {exc.__class__.__name__} (see logs)"
-        with sync_state.lock:
-            sync_state.running = False
-            sync_state.last_outcome = outcome
-            sync_state.last_finished_ts = int(time.time())
 
     return app
 
