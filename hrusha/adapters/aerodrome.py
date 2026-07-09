@@ -31,6 +31,7 @@ from web3 import Web3
 from web3.exceptions import Web3Exception
 
 from hrusha.adapters.known_contracts import (
+    AERODROME_FACTORY_REGISTRY,
     AERODROME_VOTER,
     REWARDS_SUGAR,
     SOURCE_AERODROME,
@@ -40,7 +41,6 @@ from hrusha.ledger.tags import CLAIM_TAG, ensure_rule
 
 AERO_DECIMALS = 18
 POOLS_PER_CALL = 300  # RewardsSugar.rewards scans pools; chunked eth_calls
-MAX_POOL_CHUNKS = 12
 REWARD_CONTRACT_VERDICT_KEY = "aero_reward_contract:{address}"
 CLAIM_RULE_PRIORITY = 50  # ahead of the seeded token-based guesses (100)
 
@@ -113,6 +113,26 @@ REWARDS_SUGAR_ABI = [
     }
 ]
 
+REGISTRY_ABI = [
+    {
+        "name": "poolFactories",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "address[]"}],
+    },
+]
+
+FACTORY_ABI = [
+    {
+        "name": "allPoolsLength",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}],
+    },
+]
+
 VOTER_GETTER_ABI = [
     {
         "name": "voter",
@@ -166,6 +186,10 @@ class AerodromeAdapter:
         self._rewards_sugar = w3.eth.contract(
             address=Web3.to_checksum_address(REWARDS_SUGAR), abi=REWARDS_SUGAR_ABI
         )
+        self._factory_registry = w3.eth.contract(
+            address=Web3.to_checksum_address(AERODROME_FACTORY_REGISTRY), abi=REGISTRY_ABI
+        )
+        self._pool_count: int | None = None
         self._decimals_cache: dict[str, int] = {}
 
     def venfts(self, address: str) -> list[VeNft]:
@@ -174,10 +198,8 @@ class AerodromeAdapter:
 
     def claimables(self, venft_id: int) -> list[Claimable]:
         found: list[Claimable] = []
-        for chunk in range(MAX_POOL_CHUNKS):
-            rewards = self._rewards_sugar.functions.rewards(
-                POOLS_PER_CALL, chunk * POOLS_PER_CALL, venft_id
-            ).call()
+        for offset in range(0, self._registered_pool_count(), POOLS_PER_CALL):
+            rewards = self._rewards_sugar.functions.rewards(POOLS_PER_CALL, offset, venft_id).call()
             for _venft, lp, amount_raw, token, fee, _bribe in rewards:
                 token = token.lower()
                 found.append(
@@ -190,6 +212,17 @@ class AerodromeAdapter:
                     )
                 )
         return found
+
+    def _registered_pool_count(self) -> int:
+        if self._pool_count is None:
+            factories = self._factory_registry.functions.poolFactories().call()
+            self._pool_count = sum(
+                self._w3.eth.contract(address=factory, abi=FACTORY_ABI)
+                .functions.allPoolsLength()
+                .call()
+                for factory in factories
+            )
+        return self._pool_count
 
     def is_reward_contract(self, address: str) -> bool:
         """True when `address` is an Aerodrome bribe/fee reward contract."""

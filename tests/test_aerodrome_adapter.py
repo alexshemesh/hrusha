@@ -117,9 +117,7 @@ def test_claimables_scan_complete_registry_pool_range_and_cache_count():
     second = adapter.claimables(2)
 
     expected_calls = [
-        call(300, offset, venft_id)
-        for venft_id in (1, 2)
-        for offset in range(0, 3_601, 300)
+        call(300, offset, venft_id) for venft_id in (1, 2) for offset in range(0, 3_601, 300)
     ]
     assert adapter._rewards_sugar.functions.rewards.call_args_list == expected_calls
     assert first == [
