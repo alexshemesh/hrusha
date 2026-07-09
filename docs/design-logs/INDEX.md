@@ -1,5 +1,6 @@
 # Design Log Index
 
+- 2026-07-09-1100 — `complete-aerodrome-claimables` — derive full Sugar pool range from registry (status: proposed)
 - 2026-07-08-1830 — `pool-quality-filters` — outlier/dead-pool/tiny-TVL hard filters, reward-only/apy-declining/apy-volatile tags, rank by 30d avg APY (status: implemented)
 - 2026-07-08-1715 — `invest-dashboard-and-morpho-fix` — invest suggestions on the web dashboard + Morpho vault symbol fix (status: merged)
 - 2026-07-08-1200 — `invest-scout-suggestions` — read-only invest suggestions with transparent risk tags (status: implemented)
