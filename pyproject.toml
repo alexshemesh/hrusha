@@ -57,4 +57,9 @@ select = [
     "S105",  # tests use deliberately fake secrets to verify they are never echoed
     "S106",  # token= keyword args are crypto token symbols, not passwords
     "S608",  # test helpers build INSERTs from their own literal dicts
+    "S107",  # token= defaults are crypto token symbols, not passwords
+]
+"hrusha/providers/aave.py" = [
+    "S105",  # token == "USDC" is a crypto symbol comparison, not a password
+    "S106",  # token= kwarg is a crypto symbol, not a password
 ]

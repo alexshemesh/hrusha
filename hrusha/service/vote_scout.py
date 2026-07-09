@@ -50,7 +50,7 @@ WEI = 10**18
 # concatenation of every registry factory's pool list and drops dead
 # gauges — a short page does NOT mean the end of the list
 POOL_INDEXES_PER_CALL = 200  # on-chain MAX_EPOCHS=200 caps returned rows
-TOP_CANDIDATES = 40  # pools that get the expensive per-pool deep look
+TOP_CANDIDATES = 100  # pools that get the expensive per-pool deep look
 HISTORY_EPOCHS = 6  # completed epochs used to project final votes
 PRICE_BATCH = 50  # DefiLlama coins per request (URL length bound)
 HTTP_TIMEOUT_SECONDS = 30.0
@@ -407,7 +407,7 @@ def rank(
     filters: ScoutFilters | None = None,
 ) -> list[PoolScore]:
     scored = [score_pool(raw, aero_price, my_power, filters) for raw in raws]
-    scored.sort(key=lambda p: -p.usd_per_1k)
+    scored.sort(key=lambda p: -p.my_apr_pct)
     return scored
 
 
@@ -487,7 +487,9 @@ def scan(config: Config) -> ScoutResult:
         p["fees_usd"], fee_blind = _reward_usd(p["fees"], prices, token_decimals)
         p["incentives_usd"], bribe_blind = _reward_usd(p["bribes"], prices, token_decimals)
         p["blind_share"] = max(fee_blind, bribe_blind)
-    pools.sort(key=lambda p: -(p["fees_usd"] + p["incentives_usd"]))
+    # Rank candidates by APY proxy (reward $ / running votes) so high-yield
+    # low-vote pools surface — not just pools with the most total reward $
+    pools.sort(key=lambda p: -((p["fees_usd"] + p["incentives_usd"]) / max(p["votes"], 1)))
     candidates = [p for p in pools if p["fees_usd"] + p["incentives_usd"] > 0][:TOP_CANDIDATES]
 
     raws: list[RawPool] = []

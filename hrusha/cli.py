@@ -105,6 +105,8 @@ def run_command(args: argparse.Namespace, config: Config) -> int:
         return run_rules(config, action=args.action, path=args.path)
     if args.command == "serve":
         return run_serve(config, host=args.host, port=args.port)
+    if args.command == "invest":
+        return run_invest(config)
     raise AssertionError(f"unhandled command: {args.command}")
 
 
@@ -181,6 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="bind address (default 127.0.0.1; the app has no auth — do not expose it)",
     )
     serve.add_argument("--port", type=int, default=8787, help="port (default 8787)")
+
+    subparsers.add_parser(
+        "invest",
+        help="read-only suggestions for deploying idle ETH/cbBTC/USDC into low-risk positions",
+    )
     return parser
 
 
@@ -494,6 +501,28 @@ def run_fees(config: Config, days: int) -> int:
     )
     if summary.unpriced_count:
         print(f"note: {summary.unpriced_count} fee events have no USD price yet")
+    return EXIT_OK
+
+
+def run_invest(config: Config) -> int:
+    """Read-only investment suggestions for idle ETH/cbBTC/USDC on Base.
+
+    Shows every opportunity with risk tags — nothing hidden.  The
+    ``Safe?`` column is informational; unsafe options are still listed.
+    """
+    from hrusha.providers.aave import DefiLlamaInvestScanner
+    from hrusha.service.invest_scout import aggregate_balances, render_table, scan
+
+    provider = AlchemyProvider(config.alchemy_api_key)
+    raw_balances = provider.balances(config.addresses)
+    balances = aggregate_balances(raw_balances)
+    if not balances:
+        print("no idle ETH/cbBTC/USDC balances found in your addresses")
+        return EXIT_OK
+
+    scanner = DefiLlamaInvestScanner()
+    result = scan(balances, scanner)
+    print(render_table(result))
     return EXIT_OK
 
 

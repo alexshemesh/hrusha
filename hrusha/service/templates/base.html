@@ -38,6 +38,7 @@
   <a href="/income" {% if active == 'income' %}class="active"{% endif %}>income</a>
   <a href="/transfers" {% if active == 'transfers' %}class="active"{% endif %}>transfers</a>
   <a href="/votes" {% if active == 'votes' %}class="active"{% endif %}>votes</a>
+      <a href="/invest" {% if active == 'invest' %}class="active"{% endif %}>invest</a>
   <form method="post" action="/refresh">
     <button {% if sync_running %}disabled{% endif %}>
       {% if sync_running %}syncing…{% else %}refresh{% endif %}

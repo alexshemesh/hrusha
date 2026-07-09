@@ -58,7 +58,7 @@ TOKEN-RISK flags may be missing. Rescan or verify exotic tokens manually.</div>
   <tr><th></th><th>pool</th><th class="num">%/epoch</th><th class="num">APR</th>
       <th class="num">your $</th><th class="num">pool pays</th>
       <th class="num">proj votes (M)</th><th class="num">TVL</th><th>notes</th></tr>
-  {% for p in result.suggested[:5] %}
+  {% for p in result.suggested[:10] %}
   <tr>
     <td class="num">{{ loop.index }}</td>
     <td><a href="https://basescan.org/address/{{ p.raw.lp | urlencode }}">{{ p.raw.name }}</a></td>
