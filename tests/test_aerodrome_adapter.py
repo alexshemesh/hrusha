@@ -2,10 +2,12 @@
 
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import MagicMock, call
 
 import httpx
 
 from hrusha.adapters.aerodrome import (
+    AerodromeAdapter,
     Claimable,
     VeNft,
     _venft_from_tuple,
@@ -75,6 +77,64 @@ def test_venft_parsing_scales_and_lowercases():
         permanent=True,
         votes=((OUTSIDER, Decimal(4)),),
     )
+
+
+def test_claimables_scan_complete_registry_pool_range_and_cache_count():
+    token = "0x" + "e" * 40
+    factory_a = "0x" + "a" * 40
+    factory_b = "0x" + "b" * 40
+    zero = "0x" + "0" * 40
+
+    adapter = object.__new__(AerodromeAdapter)
+    adapter._w3 = MagicMock()
+    adapter._pool_count = None
+    adapter._decimals_cache = {token: 18}
+    adapter._factory_registry = MagicMock()
+    adapter._factory_registry.functions.poolFactories.return_value.call.return_value = [
+        factory_a,
+        factory_b,
+    ]
+
+    contracts = {factory_a: MagicMock(), factory_b: MagicMock()}
+    contracts[factory_a].functions.allPoolsLength.return_value.call.return_value = 1_800
+    contracts[factory_b].functions.allPoolsLength.return_value.call.return_value = 1_801
+    adapter._w3.eth.contract.side_effect = lambda address, abi: contracts[address]
+
+    adapter._rewards_sugar = MagicMock()
+
+    def reward_call(limit, offset, venft_id):
+        result = MagicMock()
+        result.call.return_value = (
+            [(venft_id, OUTSIDER, 25 * 10**17, token, zero, REWARD_CONTRACT)]
+            if venft_id == 1 and offset == 3_600
+            else []
+        )
+        return result
+
+    adapter._rewards_sugar.functions.rewards.side_effect = reward_call
+
+    first = adapter.claimables(1)
+    second = adapter.claimables(2)
+
+    expected_calls = [
+        call(300, offset, venft_id)
+        for venft_id in (1, 2)
+        for offset in range(0, 3_601, 300)
+    ]
+    assert adapter._rewards_sugar.functions.rewards.call_args_list == expected_calls
+    assert first == [
+        Claimable(
+            venft_id=1,
+            pool=OUTSIDER,
+            token=token,
+            amount=Decimal("2.5"),
+            is_fee=False,
+        )
+    ]
+    assert second == []
+    assert adapter._factory_registry.functions.poolFactories.return_value.call.call_count == 1
+    assert contracts[factory_a].functions.allPoolsLength.return_value.call.call_count == 1
+    assert contracts[factory_b].functions.allPoolsLength.return_value.call.call_count == 1
 
 
 def test_discover_claim_rules_creates_rule_and_caches_verdict(ledger):
