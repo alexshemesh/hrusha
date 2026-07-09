@@ -32,6 +32,7 @@ import httpx
 from hrusha.adapters.known_contracts import (
     AERO_CONTRACT,
     AERODROME_FACTORY_REGISTRY,
+    LEGACY_SLIPSTREAM_POOL_FACTORIES,
     REWARDS_SUGAR,
     VE_SUGAR,
 )
@@ -255,6 +256,7 @@ class RawPool:
     # share of current incentive USD paid in the pool's own non-major tokens
     self_bribe_share: float = 0.0
     token_risks: tuple[str, ...] = ()  # GoPlus hard risks, e.g. "REI:sell_tax=8%"
+    migrating: bool = False  # legacy Slipstream pool hidden from default Aerodrome vote views
 
 
 @dataclass
@@ -342,6 +344,8 @@ def score_pool(
     )
 
     flags = []
+    if raw.migrating:
+        flags.append("MIGRATING")
     if raw.tvl_usd < filters.min_tvl_usd:
         flags.append(f"LOW-TVL(${raw.tvl_usd:,.0f})")
     if len(raw.final_votes) < filters.min_history:
@@ -414,6 +418,17 @@ def rank(
 # -- chain scan: the slow part, run on a background thread --------------------
 
 
+def _factory_pages(
+    factories: list[tuple[str, int]], page_size: int = POOL_INDEXES_PER_CALL
+):
+    """Yield (factory, limit, global offset) without crossing factory boundaries."""
+    global_offset = 0
+    for factory, pool_count in factories:
+        for local_offset in range(0, pool_count, page_size):
+            yield factory, min(page_size, pool_count - local_offset), global_offset + local_offset
+        global_offset += pool_count
+
+
 def scan(config: Config) -> ScoutResult:
     """Full scan of every alive gauge on Base. ~3 minutes; never call inline."""
     from web3 import Web3  # deferred: read-only dashboard pages never need web3
@@ -429,16 +444,20 @@ def scan(config: Config) -> ScoutResult:
     registry = w3.eth.contract(
         address=Web3.to_checksum_address(AERODROME_FACTORY_REGISTRY), abi=REGISTRY_ABI
     )
-    pool_count = sum(
-        w3.eth.contract(address=factory, abi=FACTORY_ABI).functions.allPoolsLength().call()
+    factory_lengths = [
+        (
+            factory.lower(),
+            w3.eth.contract(address=factory, abi=FACTORY_ABI).functions.allPoolsLength().call(),
+        )
         for factory in registry.functions.poolFactories().call()
-    )
+    ]
+    pool_count = sum(length for _factory, length in factory_lengths)
     log.info("vote scout scanning", extra={"pool_indexes": pool_count})
 
     pools: list[dict] = []
     seen: set[str] = set()  # defensive: window semantics must never yield a pool twice
-    for offset in range(0, pool_count, POOL_INDEXES_PER_CALL):
-        rows = rewards_sugar.functions.epochsLatest(POOL_INDEXES_PER_CALL, offset).call()
+    for factory, limit, offset in _factory_pages(factory_lengths):
+        rows = rewards_sugar.functions.epochsLatest(limit, offset).call()
         for ts, lp, votes, emissions, bribes, fees in rows:
             if ts != epoch_start:  # decode sanity: running epoch must be Thursday-anchored
                 raise RuntimeError(f"LpEpoch decode looks wrong: ts={ts} != {epoch_start}")
@@ -454,6 +473,7 @@ def scan(config: Config) -> ScoutResult:
                     # AERO/second to the gauge; scaled to the fees accrual
                     # window below so fees/emissions compares like with like
                     "emissions_rate": emissions / WEI,
+                    "migrating": factory in LEGACY_SLIPSTREAM_POOL_FACTORIES,
                 }
             )
 
@@ -510,6 +530,7 @@ def scan(config: Config) -> ScoutResult:
                     incentives_usd=p["incentives_usd"],
                     blind_share=p["blind_share"],
                     tvl_usd=0.0,
+                    migrating=p["migrating"],
                 )
             )
             continue
@@ -551,6 +572,7 @@ def scan(config: Config) -> ScoutResult:
                 self_bribe_share=(
                     self_bribe_usd / incentive_usd_total if incentive_usd_total else 0.0
                 ),
+                migrating=p["migrating"],
             )
         )
 
