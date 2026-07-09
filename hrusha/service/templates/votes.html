@@ -55,6 +55,11 @@ TOKEN-RISK flags may be missing. Rescan or verify exotic tokens manually.</div>
 {% endfor %}
 
 <h2>Suggested (every risk gate passed)</h2>
+<p class="muted">
+  Open <a href="https://aerodrome.finance/vote?">Aerodrome voting</a>.
+  Its default view is <b>Most rewarded</b>; use <b>Pools → All pools</b> to find
+  lower-reward pools. Aerodrome migrating pools are excluded from suggestions here.
+</p>
 {% if result.suggested %}
 <table>
   <tr><th></th><th>pool</th><th class="num">%/epoch</th><th class="num">APR</th>

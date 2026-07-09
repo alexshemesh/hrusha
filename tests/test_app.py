@@ -354,6 +354,9 @@ def test_votes_scan_renders_suggestions_in_percent_and_flags_traps(config):
     assert "LOW-TVL" in body
     suggested_section = body.split("All candidates")[0]
     assert "TRAP" not in suggested_section
+    assert 'href="https://aerodrome.finance/vote?"' in body
+    assert "Pools → All pools" in body
+    assert "migrating pools are excluded" in body
 
 
 def test_votes_page_distinguishes_recast_carried_and_empty_allocations(config):
