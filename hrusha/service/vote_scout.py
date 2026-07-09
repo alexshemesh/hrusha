@@ -291,6 +291,7 @@ class VeNft:
     power: float
     voted_this_epoch: bool
     wallet_label: str
+    active_pool_count: int = 0
 
 
 @dataclass
@@ -724,6 +725,7 @@ def _fetch_venfts(w3, http: httpx.Client, config: Config, epoch_start: int) -> l
                     power=nft["voting_amount"] / WEI,
                     voted_this_epoch=nft["voted_at"] >= epoch_start,
                     wallet_label=label,
+                    active_pool_count=len(nft["votes"]),
                 )
             )
     return venfts

@@ -349,11 +349,33 @@ def test_votes_scan_renders_suggestions_in_percent_and_flags_traps(config):
     else:
         raise AssertionError("scan result never appeared")
     assert "%" in body and "APR" in body  # profits in percents
-    assert "veNFT #7" in body and "NOT voted" in body
+    assert "veNFT #7" in body and "no active allocation" in body
     # the $1k trap pool shows in the table with its flag, never as suggested
     assert "LOW-TVL" in body
     suggested_section = body.split("All candidates")[0]
     assert "TRAP" not in suggested_section
+
+
+def test_votes_page_distinguishes_recast_carried_and_empty_allocations(config):
+    from hrusha.service.vote_scout import VeNft
+
+    result = make_scout_result()
+    result.venfts = [
+        VeNft(1, 100.0, True, "main", active_pool_count=1),
+        VeNft(2, 200.0, False, "main", active_pool_count=2),
+        VeNft(3, 300.0, False, "main", active_pool_count=0),
+    ]
+    client = make_client(config, scout_runner=lambda cfg: result)
+    client.post("/votes/scan", follow_redirects=False)
+    for _ in range(100):
+        body = client.get("/votes").text
+        if "veNFT #3" in body:
+            break
+        time.sleep(0.02)
+    assert "recast this epoch ✓" in body
+    assert "carried forward — 2 pools" in body
+    assert "no active allocation" in body
+    assert "NOT voted" not in body
 
 
 def test_votes_scan_failure_is_reported_not_raised(config):

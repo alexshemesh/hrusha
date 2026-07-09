@@ -49,7 +49,9 @@ TOKEN-RISK flags may be missing. Rescan or verify exotic tokens manually.</div>
 
 {% for nft in result.venfts %}
 <span class="pill">{{ nft.wallet_label }} veNFT #{{ nft.id }}: {{ '{:,.0f}'.format(nft.power) }}
-  — {% if nft.voted_this_epoch %}voted ✓{% else %}NOT voted{% endif %}</span>
+  — {% if nft.voted_this_epoch %}recast this epoch ✓{% elif nft.active_pool_count
+  %}carried forward — {{ nft.active_pool_count }} pool{{ '' if nft.active_pool_count == 1
+  else 's' }}{% else %}no active allocation{% endif %}</span>
 {% endfor %}
 
 <h2>Suggested (every risk gate passed)</h2>
