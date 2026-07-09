@@ -1,7 +1,7 @@
 ---
 date: 2026-07-07T16:42
 type: infra
-status: proposed
+status: merged
 trigger: architecture
 touches:
   - compose.yaml
@@ -14,8 +14,8 @@ touches:
 related:
   - 2026-07-06-1620-phase5a-fastapi-dashboard.md
 supersedes: null
-commit: null
-pr: null
+commit: df802cf
+pr: https://github.com/alexshemesh/hrusha/pull/13
 ---
 
 # Phase 6: Docker compose deployment, ops scripts, AI runbook
