@@ -29,6 +29,11 @@ AERODROME_VOTER = "0x16613524e02ad97eDfeF371bC883F2F5d6C480A5"
 # pool pagination spans the concatenation of every registered factory's
 # pool list, so the registry defines the index space to scan
 AERODROME_FACTORY_REGISTRY = "0x5C3F18F06CC09CA1910767A34a20F771039E37C0"
+# Aerodrome's legacy Slipstream factory: its pools remain live/votable but the
+# current frontend labels them "Migrating" and excludes them from the default
+# rewarded-pool views ahead of the MEV-resistant gauge migration.
+LEGACY_SLIPSTREAM_POOL_FACTORY = "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a"
+LEGACY_SLIPSTREAM_POOL_FACTORIES = frozenset({LEGACY_SLIPSTREAM_POOL_FACTORY})
 VE_SUGAR = "0x4d6A741cEE6A8cC5632B2d948C050303F6246D24"
 REWARDS_SUGAR = "0x1b121EfDaF4ABb8785a315C51D29BCE0552A7678"
 # veAERO escrow (verified as 'VotingEscrow' on Blockscout); AERO sent here
