@@ -419,9 +419,7 @@ def rank(
 # -- chain scan: the slow part, run on a background thread --------------------
 
 
-def _factory_pages(
-    factories: list[tuple[str, int]], page_size: int = POOL_INDEXES_PER_CALL
-):
+def _factory_pages(factories: list[tuple[str, int]], page_size: int = POOL_INDEXES_PER_CALL):
     """Yield (factory, limit, global offset) without crossing factory boundaries."""
     global_offset = 0
     for factory, pool_count in factories:
