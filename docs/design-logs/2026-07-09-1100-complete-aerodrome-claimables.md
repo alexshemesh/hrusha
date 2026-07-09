@@ -28,23 +28,23 @@ The registered Aerodrome pool universe outgrew the fixed 3,600-index ceiling. Hr
 
 ## Decision
 
-Derive the complete pool index count from Aerodrome's Factory Registry and each registered factory's `allPoolsLength()`. Cache the count per adapter instance and paginate RewardsSugar through that complete range for every veNFT.
+Backfill each veNFT's historical pools from the Voter contract's indexed `Voted` events through Blockscout, persist the pool set and cursor in existing `sync_state`, and query each known pool directly with `RewardsSugar.rewardsByAddress()`.
 
-Failure to determine the complete range remains a sync error rather than silently degrading to a partial scan, because a partial result is financially misleading.
+The initially selected registry-complete scan was implemented and passed automated tests, then rejected when live verification exceeded three minutes and saturated the configured RPC. Financial completeness and refresh operability both require targeted reads.
 
 ## Alternatives Considered
 
 - **Query current voted pools directly** — efficient and fixes the observed pool, but misses outstanding rewards from pools voted in prior epochs.
-- **Persist vote history and query known pools** — eventually efficient, but requires schema/backfill work and cannot guarantee immediate completeness.
-- **Increase the fixed ceiling** — minimal diff, but repeats the same failure when the pool universe grows again.
+- **Scan the complete registry range** — complete in theory, but live verification exceeded three minutes and saturated the RPC.
+- **Increase the fixed ceiling** — minimal diff, but repeats the same correctness failure and retains global-scan cost.
 - **Do nothing** — rejected because the dashboard materially under-reports claimable income.
 
 ## Implementation Notes
 
-- Reuse the Factory Registry and factory `allPoolsLength()` contracts already used by the vote scout.
-- Keep `AerodromeAdapter.claimables(venft_id)` unchanged for callers.
-- Cache only immutable-within-a-sync metadata; adapter instances are created per command/service sync path.
-- Add a regression test with the reward outside the former 3,600-index range.
+- Filter the Voter's `Voted(address,address,uint256,uint256,uint256,uint256)` event by indexed `tokenId` through Blockscout's public logs API.
+- Store pool history and a block cursor in existing `sync_state`; no migration is needed.
+- Query the official Sugar `rewardsByAddress(veNFT, pool)` view for deduplicated known pools.
+- Treat Blockscout's 1,000-result maximum as truncation and fail loudly instead of accepting incomplete history.
 - The change is read-only onchain and does not claim or move funds.
 
 ## Follow-ups
