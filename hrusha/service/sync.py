@@ -39,7 +39,6 @@ CURSOR_KEY_TEMPLATE = "transfers_cursor:{address}"
 # a shared cursor would silently skip all historical veNFT trades
 NFT_CURSOR_KEY_TEMPLATE = "nft_cursor:{address}"
 AERO_VOTE_POOLS_KEY_TEMPLATE = "aero_vote_pools:{venft_id}"
-AERO_VOTE_CURSOR_KEY_TEMPLATE = "aero_vote_cursor:{venft_id}"
 
 log = logging.getLogger("hrusha.sync")
 
@@ -281,28 +280,16 @@ def _snapshot_aerodrome(
 
 def _aerodrome_claimable_pools(conn, aerodrome, nft) -> tuple[str, ...]:
     pools_key = AERO_VOTE_POOLS_KEY_TEMPLATE.format(venft_id=nft.id)
-    cursor_key = AERO_VOTE_CURSOR_KEY_TEMPLATE.format(venft_id=nft.id)
     pools_row = conn.execute("SELECT value FROM sync_state WHERE key = ?", (pools_key,)).fetchone()
-    cursor_row = conn.execute(
-        "SELECT value FROM sync_state WHERE key = ?", (cursor_key,)
-    ).fetchone()
 
     pools = set(json.loads(pools_row[0])) if pools_row else set()
     pools.update(pool.lower() for pool, _weight in nft.votes)
-    from_block = int(cursor_row[0]) + 1 if cursor_row else 0
-    history = aerodrome.vote_history(nft.id, from_block)
-    pools.update(pool.lower() for pool in history.pools)
     ordered = tuple(sorted(pools))
 
     conn.execute(
         "INSERT INTO sync_state (key, value) VALUES (?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (pools_key, json.dumps(ordered, separators=(",", ":"))),
-    )
-    conn.execute(
-        "INSERT INTO sync_state (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (cursor_key, str(history.through_block)),
     )
     return ordered
 

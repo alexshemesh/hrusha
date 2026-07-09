@@ -28,7 +28,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 
-import httpx
 from web3 import Web3
 from web3.exceptions import Web3Exception
 
@@ -39,14 +38,8 @@ from hrusha.adapters.known_contracts import (
     VE_SUGAR,
 )
 from hrusha.ledger.tags import CLAIM_TAG, ensure_rule
-from hrusha.providers.interface import ProviderError
 
 AERO_DECIMALS = 18
-BLOCKSCOUT_API_URL = "https://base.blockscout.com/api"
-BLOCKSCOUT_LOG_LIMIT = 1_000
-VOTED_EVENT_TOPIC = Web3.to_hex(
-    Web3.keccak(text="Voted(address,address,uint256,uint256,uint256,uint256)")
-)
 REWARD_CONTRACT_VERDICT_KEY = "aero_reward_contract:{address}"
 CLAIM_RULE_PRIORITY = 50  # ahead of the seeded token-based guesses (100)
 
@@ -160,24 +153,11 @@ class Claimable:
     is_fee: bool  # False = bribe
 
 
-@dataclass(frozen=True)
-class VoteHistory:
-    pools: tuple[str, ...]
-    through_block: int
-
-
 class AerodromeAdapter:
     """Read-only contract views over Aerodrome, one Web3 client."""
 
-    def __init__(
-        self,
-        w3: Web3,
-        http: httpx.Client | None = None,
-        blockscout_url: str = BLOCKSCOUT_API_URL,
-    ) -> None:
+    def __init__(self, w3: Web3) -> None:
         self._w3 = w3
-        self._http = http or httpx.Client(timeout=60.0)
-        self._blockscout_url = blockscout_url
         self._ve_sugar = w3.eth.contract(
             address=Web3.to_checksum_address(VE_SUGAR), abi=VE_SUGAR_ABI
         )
@@ -208,63 +188,6 @@ class AerodromeAdapter:
                     )
                 )
         return found
-
-    def vote_history(self, venft_id: int, from_block: int) -> VoteHistory:
-        """Pools voted by one veNFT since `from_block`, plus the captured chain head."""
-        through_block = int(self._w3.eth.block_number)
-        if from_block > through_block:
-            return VoteHistory((), through_block)
-        token_topic = f"0x{venft_id:064x}"
-        try:
-            response = self._http.get(
-                self._blockscout_url,
-                params={
-                    "module": "logs",
-                    "action": "getLogs",
-                    "fromBlock": from_block,
-                    "toBlock": through_block,
-                    "address": AERODROME_VOTER,
-                    "topic0": VOTED_EVENT_TOPIC,
-                    "topic3": token_topic,
-                    "topic0_3_opr": "and",
-                },
-            )
-            response.raise_for_status()
-            body = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ProviderError("Blockscout vote history request failed") from exc
-
-        rows = body.get("result")
-        if body.get("status") == "0" and rows == []:
-            return VoteHistory((), through_block)
-        if body.get("status") != "1" or not isinstance(rows, list):
-            raise ProviderError("Blockscout vote history returned an invalid response")
-        if len(rows) >= BLOCKSCOUT_LOG_LIMIT:
-            raise ProviderError("Blockscout vote history reached the 1,000-log limit")
-
-        pools: set[str] = set()
-        for row in rows:
-            topics = row.get("topics") if isinstance(row, dict) else None
-            if (
-                not isinstance(topics, list)
-                or len(topics) < 4
-                or not all(isinstance(topic, str) for topic in topics[:4])
-            ):
-                raise ProviderError("Blockscout vote history returned a malformed Voted log")
-            try:
-                matches_event = topics[0].lower() == VOTED_EVENT_TOPIC.lower()
-                matches_venft = int(topics[3], 16) == venft_id
-            except ValueError as exc:
-                raise ProviderError(
-                    "Blockscout vote history returned a malformed Voted log"
-                ) from exc
-            if not matches_event or not matches_venft:
-                raise ProviderError("Blockscout vote history returned a malformed Voted log")
-            pool = f"0x{topics[2][-40:]}".lower()
-            if not Web3.is_address(pool):
-                raise ProviderError("Blockscout vote history returned an invalid pool address")
-            pools.add(pool)
-        return VoteHistory(tuple(sorted(pools)), through_block)
 
     def is_reward_contract(self, address: str) -> bool:
         """True when `address` is an Aerodrome bribe/fee reward contract."""

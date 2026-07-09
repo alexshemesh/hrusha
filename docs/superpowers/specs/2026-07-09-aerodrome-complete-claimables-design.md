@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make the overview dashboard collect every currently claimable Aerodrome voting reward for each tracked veNFT, including rewards left unclaimed from pools voted in previous epochs.
+Make the overview dashboard collect Aerodrome voting rewards from every current or previously observed pool for each tracked veNFT, without a global registry scan or a blocking historical-log backfill.
 
 ## Root cause
 
@@ -14,27 +14,25 @@ The configured RewardsSugar deployment and tuple ABI match the current official 
 
 The initial registry-complete scan was rejected after live verification exceeded three minutes and saturated the configured RPC. Completeness must not make normal refreshes unusable.
 
-Use targeted pool history instead:
+Use persisted targeted pools instead:
 
-1. Fetch historical `Voted` events from Blockscout, filtering the official Voter contract by the indexed veNFT ID.
-2. Merge those pools with the current vote list returned by VeSugar.
-3. Persist the deduplicated pool set and backfill cursor in SQLite's existing `sync_state` table.
+1. Read the current vote list returned by VeSugar.
+2. Merge it with the veNFT's pools persisted by earlier successful syncs.
+3. Persist the deduplicated union in SQLite's existing `sync_state` table.
 4. Query `RewardsSugar.rewardsByAddress(veNFT, pool)` once for each known pool.
-5. On later syncs, fetch only vote events after the stored cursor, while always merging current votes defensively.
 
-This finds outstanding rewards from current and previous epochs without scanning unrelated pools. No schema migration, configuration change, or new dependency is required.
+This fixes the observed missing rewards immediately and retains pools across future epochs without scanning unrelated pools. It cannot discover a no-longer-current pool that predates the first successful fixed-version sync; doing that requires an explicit backfill with a historical-log provider capable of serving the Voter's full history. No available endpoint proved capable during live verification, so normal refreshes must not claim that guarantee or block on it. No schema migration, configuration change, or new dependency is required.
 
 ## Error handling
 
-Vote-history or direct reward-read failures will propagate and fail the Aerodrome snapshot portion of the sync. The history cursor advances only in the same transaction that persists discovered pools. Recording a successful-looking zero when completeness cannot be established would be misleading.
+Direct reward-read failures propagate and fail the Aerodrome snapshot portion of the sync. Pool persistence occurs in the same transaction as the snapshots. Historical-log availability has no effect on a normal refresh.
 
 ## Testing
 
 Add coverage that:
 
-- parses and filters Blockscout `Voted` logs for one veNFT;
-- rejects a 1,000-row response rather than accepting a possibly truncated history;
-- persists and incrementally extends per-veNFT pool history;
+- persists and incrementally extends each veNFT's observed pool set;
+- succeeds without invoking the historical vote endpoint;
 - queries each known pool exactly once with `rewardsByAddress()`;
 - preserves existing fee/bribe and token-decimal behavior.
 
@@ -42,7 +40,8 @@ Run the complete pytest suite plus Ruff lint and formatting checks. After unit v
 
 ## Alternatives rejected
 
-- Query only pools in each veNFT's current vote list: fast, but misses unclaimed rewards from previous epochs.
+- Blockscout historical `Voted` query: targeted in theory, but timed out against the production history.
+- Query only current pools without persistence: fast, but forgets pools after the next epoch.
 - Scan the complete Factory Registry range: complete in theory, but live verification exceeded three minutes and saturated the RPC.
 - Raise the fixed chunk constant: postpones the same correctness failure and retains global-scan cost.
 

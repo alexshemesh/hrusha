@@ -6,14 +6,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, call
 
 import httpx
-import pytest
-from web3 import Web3
 
 from hrusha.adapters.aerodrome import (
     AerodromeAdapter,
     Claimable,
     VeNft,
-    VoteHistory,
     _venft_from_tuple,
     discover_claim_rules,
 )
@@ -22,7 +19,6 @@ from hrusha.config import Config
 from hrusha.ledger.store import open_ledger
 from hrusha.ledger.tags import retag_all
 from hrusha.prices import PriceResolver
-from hrusha.providers.interface import ProviderError
 from tests.conftest import COLD, MAIN, OUTSIDER, FakeProvider, make_transfer
 
 REWARD_CONTRACT = "0x" + "c" * 40
@@ -59,11 +55,13 @@ class StubAdapter:
         venfts_by_address=None,
         claimables_by_id=None,
         vote_history_by_id=None,
+        vote_history_error=None,
     ):
         self._reward_contracts = set(reward_contracts)
         self._venfts = venfts_by_address or {}
         self._claimables = claimables_by_id or {}
         self._vote_history = vote_history_by_id or {}
+        self._vote_history_error = vote_history_error
         self.verdict_calls: list[str] = []
         self.claimable_calls: list[tuple[int, tuple[str, ...]]] = []
         self.vote_history_calls: list[tuple[int, int]] = []
@@ -81,7 +79,9 @@ class StubAdapter:
 
     def vote_history(self, venft_id, from_block):
         self.vote_history_calls.append((venft_id, from_block))
-        return self._vote_history.get(venft_id, VoteHistory((), from_block))
+        if self._vote_history_error is not None:
+            raise self._vote_history_error
+        return self._vote_history.get(venft_id)
 
 
 def test_venft_parsing_scales_and_lowercases():
@@ -142,130 +142,6 @@ def test_claimables_query_each_known_pool_once():
     ]
 
 
-def test_vote_history_decodes_pool_and_records_head_block():
-    pool = "0x" + "1" * 40
-    venft_id = 76592
-    voted_topic = (
-        "0x" + Web3.keccak(text="Voted(address,address,uint256,uint256,uint256,uint256)").hex()
-    )
-    row = {
-        "blockNumber": "0x2a",
-        "topics": [
-            voted_topic,
-            "0x" + "0" * 24 + MAIN[2:],
-            "0x" + "0" * 24 + pool[2:],
-            "0x" + format(venft_id, "064x"),
-        ],
-    }
-
-    def handler(request):
-        params = request.url.params
-        assert params["module"] == "logs"
-        assert params["action"] == "getLogs"
-        assert params["fromBlock"] == "10"
-        assert params["toBlock"] == "50"
-        assert params["topic0"] == voted_topic
-        assert params["topic3"] == "0x" + format(venft_id, "064x")
-        assert params["topic0_3_opr"] == "and"
-        return httpx.Response(200, json={"status": "1", "message": "OK", "result": [row]})
-
-    adapter = object.__new__(AerodromeAdapter)
-    adapter._w3 = MagicMock()
-    adapter._w3.eth.block_number = 50
-    adapter._http = httpx.Client(transport=httpx.MockTransport(handler))
-    adapter._blockscout_url = "https://example.test/api"
-
-    history = adapter.vote_history(venft_id, from_block=10)
-
-    assert history.pools == (pool,)
-    assert history.through_block == 50
-
-
-def test_vote_history_accepts_normal_empty_result():
-    adapter = object.__new__(AerodromeAdapter)
-    adapter._w3 = MagicMock()
-    adapter._w3.eth.block_number = 50
-    adapter._http = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                json={"status": "0", "message": "No logs found", "result": []},
-            )
-        )
-    )
-    adapter._blockscout_url = "https://example.test/api"
-
-    history = adapter.vote_history(76592, from_block=10)
-
-    assert history.pools == ()
-    assert history.through_block == 50
-
-
-def test_vote_history_rejects_blockscout_result_limit():
-    venft_id = 76592
-    pool = "0x" + "1" * 40
-    voted_topic = (
-        "0x" + Web3.keccak(text="Voted(address,address,uint256,uint256,uint256,uint256)").hex()
-    )
-    row = {
-        "blockNumber": "0x2a",
-        "topics": [
-            voted_topic,
-            "0x" + "0" * 24 + MAIN[2:],
-            "0x" + "0" * 24 + pool[2:],
-            "0x" + format(venft_id, "064x"),
-        ],
-    }
-    adapter = object.__new__(AerodromeAdapter)
-    adapter._w3 = MagicMock()
-    adapter._w3.eth.block_number = 50
-    adapter._http = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200, json={"status": "1", "message": "OK", "result": [row] * 1_000}
-            )
-        )
-    )
-    adapter._blockscout_url = "https://example.test/api"
-
-    with pytest.raises(ProviderError, match="1,000-log limit"):
-        adapter.vote_history(venft_id, from_block=0)
-
-
-def test_vote_history_rejects_non_hex_topics_as_provider_error():
-    voted_topic = (
-        "0x" + Web3.keccak(text="Voted(address,address,uint256,uint256,uint256,uint256)").hex()
-    )
-    adapter = object.__new__(AerodromeAdapter)
-    adapter._w3 = MagicMock()
-    adapter._w3.eth.block_number = 50
-    adapter._http = httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                json={
-                    "status": "1",
-                    "message": "OK",
-                    "result": [
-                        {
-                            "topics": [
-                                voted_topic,
-                                "0x" + "0" * 64,
-                                "0x" + "0" * 24 + ("1" * 40),
-                                "not-hex",
-                            ]
-                        }
-                    ],
-                },
-            )
-        )
-    )
-    adapter._blockscout_url = "https://example.test/api"
-
-    with pytest.raises(ProviderError, match="malformed Voted log"):
-        adapter.vote_history(76592, from_block=0)
-
-
 def test_discover_claim_rules_creates_rule_and_caches_verdict(ledger):
     from hrusha.ledger.ingest import ingest_transfers
 
@@ -309,7 +185,6 @@ def test_sync_writes_position_and_claimable_snapshots(tmp_path):
     )
     provider = FakeProvider(transfers=[])
     current_pool = OUTSIDER
-    historical_pool = "0x" + "e" * 40
     stored_pool = "0x" + "f" * 40
     aerodrome = StubAdapter(
         venfts_by_address={
@@ -337,7 +212,6 @@ def test_sync_writes_position_and_claimable_snapshots(tmp_path):
                 )
             ]
         },
-        vote_history_by_id={1: VoteHistory((historical_pool, current_pool), 123)},
     )
     conn = open_ledger(config.db_path)
     with conn:
@@ -359,20 +233,16 @@ def test_sync_writes_position_and_claimable_snapshots(tmp_path):
     )
 
     assert summary.aerodrome_snapshots == 3
-    assert aerodrome.vote_history_calls == [(1, 100)]
-    assert aerodrome.claimable_calls == [
-        (1, tuple(sorted((current_pool, historical_pool, stored_pool))))
-    ]
+    assert aerodrome.vote_history_calls == []
+    assert aerodrome.claimable_calls == [(1, tuple(sorted((current_pool, stored_pool))))]
     state = dict(
         conn.execute(
             "SELECT key, value FROM sync_state WHERE key IN (?, ?)",
             ("aero_vote_pools:1", "aero_vote_cursor:1"),
         ).fetchall()
     )
-    assert json.loads(state["aero_vote_pools:1"]) == sorted(
-        (current_pool, historical_pool, stored_pool)
-    )
-    assert state["aero_vote_cursor:1"] == "123"
+    assert json.loads(state["aero_vote_pools:1"]) == sorted((current_pool, stored_pool))
+    assert state["aero_vote_cursor:1"] == "99"
     rows = conn.execute(
         "SELECT kind, token, source, amount_native FROM snapshots"
         " WHERE kind IN ('position', 'claimable') ORDER BY id"
@@ -380,6 +250,65 @@ def test_sync_writes_position_and_claimable_snapshots(tmp_path):
     assert rows == [
         ("position", "AERO", SOURCE_AERODROME, "100"),
         ("claimable", "AERO", "aerodrome-rebase", "2.5"),
+        ("claimable", "0x" + "d" * 40, SOURCE_AERODROME, "12.5"),
+    ]
+    conn.close()
+
+
+def test_sync_does_not_require_vote_history_to_collect_current_claimables(tmp_path):
+    from hrusha.service.sync import run_full_sync
+
+    config = Config(
+        addresses={"main": MAIN},
+        alchemy_api_key="unused",
+        etherscan_api_key=None,
+        db_path=Path(tmp_path) / "ledger.db",
+    )
+    current_pool = OUTSIDER
+    stored_pool = "0x" + "f" * 40
+    aerodrome = StubAdapter(
+        venfts_by_address={
+            MAIN: [
+                VeNft(
+                    id=1,
+                    locked_aero=Decimal(100),
+                    voting_amount=Decimal(90),
+                    rebase_aero=Decimal(0),
+                    expires_at=0,
+                    voted_at=0,
+                    permanent=True,
+                    votes=((current_pool, Decimal(90)),),
+                )
+            ]
+        },
+        claimables_by_id={1: [Claimable(1, current_pool, "0x" + "d" * 40, Decimal("12.5"), False)]},
+        vote_history_error=RuntimeError("history unavailable"),
+    )
+    conn = open_ledger(config.db_path)
+    with conn:
+        conn.execute(
+            "INSERT INTO sync_state (key, value) VALUES (?, ?)",
+            ("aero_vote_pools:1", json.dumps([stored_pool])),
+        )
+    offline = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500)))
+
+    summary = run_full_sync(
+        config,
+        FakeProvider(transfers=[]),
+        conn,
+        PriceResolver(conn, FakeProvider(transfers=[]), http=offline),
+        aerodrome=aerodrome,
+    )
+
+    assert summary.aerodrome_snapshots == 2
+    assert aerodrome.vote_history_calls == []
+    assert aerodrome.claimable_calls == [(1, tuple(sorted((current_pool, stored_pool))))]
+    rows = conn.execute(
+        "SELECT kind, token, source, amount_native FROM snapshots"
+        " WHERE kind IN ('position', 'claimable') ORDER BY id"
+    ).fetchall()
+    assert rows == [
+        ("position", "AERO", SOURCE_AERODROME, "100"),
         ("claimable", "0x" + "d" * 40, SOURCE_AERODROME, "12.5"),
     ]
     conn.close()
