@@ -60,4 +60,3 @@ The page will link to Aerodrome's vote screen and state that pools outside its d
 - **Aerodrome frontend API**: rejected because it is not a documented public contract and would add a new availability dependency to a weekly on-chain scan.
 - **Call `factory()` for every candidate**: correct but rejected because the scan is already RPC-latency bound.
 - **Only add UI instructions**: rejected because migrating pools would still be presented as financially clean suggestions.
-

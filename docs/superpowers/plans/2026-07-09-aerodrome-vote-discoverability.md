@@ -17,7 +17,7 @@
 - Modify: `hrusha/service/vote_scout.py`
 - Test: `tests/test_vote_scout.py`
 
-- [ ] **Step 1: Write failing scoring and pagination tests**
+- [x] **Step 1: Write failing scoring and pagination tests**
 
 Add the imports and tests below to `tests/test_vote_scout.py`:
 
@@ -46,7 +46,7 @@ def test_factory_pages_preserve_factory_boundaries_and_global_offsets():
     ]
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -56,7 +56,7 @@ Run:
 
 Expected: collection fails because `_factory_pages` does not exist and `RawPool` does not accept `migrating`.
 
-- [ ] **Step 3: Implement factory-aware enumeration and the blocking flag**
+- [x] **Step 3: Implement factory-aware enumeration and the blocking flag**
 
 In `hrusha/adapters/known_contracts.py`, add the public legacy factory identity:
 
@@ -122,7 +122,7 @@ Pass the migration fact into both `RawPool` construction paths:
 migrating=p["migrating"],
 ```
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run:
 
@@ -132,7 +132,7 @@ Run:
 
 Expected: all vote-scout unit tests pass.
 
-- [ ] **Step 5: Commit the migration gate**
+- [x] **Step 5: Commit the migration gate**
 
 ```bash
 git add hrusha/adapters/known_contracts.py hrusha/service/vote_scout.py tests/test_vote_scout.py
@@ -146,7 +146,7 @@ git commit -m "fix: exclude migrating Aerodrome pools"
 - Modify: `hrusha/service/templates/votes.html`
 - Test: `tests/test_app.py`
 
-- [ ] **Step 1: Write a failing dashboard status test**
+- [x] **Step 1: Write a failing dashboard status test**
 
 Add to `tests/test_app.py`:
 
@@ -173,7 +173,7 @@ def test_votes_page_distinguishes_recast_carried_and_empty_allocations(config):
     assert "NOT voted" not in body
 ```
 
-- [ ] **Step 2: Run the dashboard test and verify RED**
+- [x] **Step 2: Run the dashboard test and verify RED**
 
 Run:
 
@@ -183,7 +183,7 @@ Run:
 
 Expected: failure because `VeNft` has no `active_pool_count` and the old label is rendered.
 
-- [ ] **Step 3: Implement the allocation state**
+- [x] **Step 3: Implement the allocation state**
 
 Extend `VeNft` without breaking existing fixtures:
 
@@ -208,7 +208,7 @@ In `_fetch_venfts`, set `active_pool_count=len(nft["votes"])`. Replace the templ
 
 Update the existing dashboard assertion from `NOT voted` to `no active allocation`.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run:
 
@@ -218,7 +218,7 @@ Run:
 
 Expected: all dashboard tests pass.
 
-- [ ] **Step 5: Commit allocation semantics**
+- [x] **Step 5: Commit allocation semantics**
 
 ```bash
 git add hrusha/service/vote_scout.py hrusha/service/templates/votes.html tests/test_app.py
@@ -231,7 +231,7 @@ git commit -m "fix: show carried Aerodrome vote allocations"
 - Modify: `hrusha/service/templates/votes.html`
 - Test: `tests/test_app.py`
 
-- [ ] **Step 1: Write failing guidance assertions**
+- [x] **Step 1: Write failing guidance assertions**
 
 In `test_votes_scan_renders_suggestions_in_percent_and_flags_traps`, add:
 
@@ -241,7 +241,7 @@ assert "Pools → All pools" in body
 assert "migrating pools are excluded" in body
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -251,7 +251,7 @@ Run:
 
 Expected: failure because the Aerodrome link and instructions are absent.
 
-- [ ] **Step 3: Add read-only navigation guidance**
+- [x] **Step 3: Add read-only navigation guidance**
 
 Below the suggested-pools heading in `votes.html`, add:
 
@@ -263,7 +263,7 @@ Below the suggested-pools heading in `votes.html`, add:
 </p>
 ```
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run:
 
@@ -273,7 +273,7 @@ Run:
 
 Expected: pass.
 
-- [ ] **Step 5: Commit discoverability guidance**
+- [x] **Step 5: Commit discoverability guidance**
 
 ```bash
 git add hrusha/service/templates/votes.html tests/test_app.py
@@ -285,7 +285,7 @@ git commit -m "feat: link vote suggestions to Aerodrome"
 **Files:**
 - Modify if necessary: `docs/design-logs/2026-07-09-1220-vote-discoverability.md`
 
-- [ ] **Step 1: Run the complete test suite**
+- [x] **Step 1: Run the complete test suite**
 
 ```bash
 .venv/bin/pytest -q > /tmp/hrusha-vote-tests.log 2>&1
@@ -294,7 +294,7 @@ tail -20 /tmp/hrusha-vote-tests.log
 
 Expected: zero failures.
 
-- [ ] **Step 2: Run lint and formatting checks**
+- [x] **Step 2: Run lint and formatting checks**
 
 ```bash
 .venv/bin/ruff check . > /tmp/hrusha-vote-ruff.log 2>&1
@@ -305,11 +305,11 @@ tail -20 /tmp/hrusha-vote-format.log
 
 Expected: both commands exit zero.
 
-- [ ] **Step 3: Re-run the design-log trigger checklist**
+- [x] **Step 3: Re-run the design-log trigger checklist**
 
 Confirm the proposed entry covers the migration workaround, financial-data integrity, touched files, alternatives, and follow-ups. Keep status `proposed` until merge.
 
-- [ ] **Step 4: Inspect the final diff and worktree**
+- [x] **Step 4: Inspect the final diff and worktree**
 
 ```bash
 git diff main --check

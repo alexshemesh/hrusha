@@ -54,4 +54,3 @@ Separately expose whether VeSugar reports active pool allocations. The dashboard
 
 - Add scan phase/progress reporting separately; the registry now exceeds 34,000 pool indexes and the old three-minute estimate is stale.
 - Revalidate the explicit legacy-factory set when Aerodrome announces another gauge migration.
-
