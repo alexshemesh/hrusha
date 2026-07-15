@@ -1,6 +1,6 @@
 """Pure scoring math for the Aerodrome vote scout (no chain, no HTTP)."""
 
-from hrusha.service.vote_scout import RawPool, ScoutResult, rank, score_pool
+from hrusha.service.vote_scout import RawPool, ScoutResult, _factory_pages, rank, score_pool
 
 AERO_PRICE = 0.50
 MY_POWER = 10_000.0  # veAERO -> $5,000 at AERO_PRICE
@@ -27,6 +27,21 @@ def test_clean_pool_is_suggested_with_no_flags():
     score = score_pool(clean_pool(), AERO_PRICE, MY_POWER)
     assert score.flags == ()
     assert score.suggested
+
+
+def test_migrating_pool_is_flagged_and_never_suggested():
+    score = score_pool(clean_pool(migrating=True), AERO_PRICE, MY_POWER)
+    assert "MIGRATING" in score.flags
+    assert not score.suggested
+
+
+def test_factory_pages_preserve_factory_boundaries_and_global_offsets():
+    pages = list(_factory_pages([("old", 250), ("new", 30)]))
+    assert pages == [
+        ("old", 200, 0),
+        ("old", 50, 200),
+        ("new", 30, 250),
+    ]
 
 
 def test_projection_uses_history_median_not_flattering_current_votes():
