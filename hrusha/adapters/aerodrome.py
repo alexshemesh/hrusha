@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -39,8 +40,6 @@ from hrusha.adapters.known_contracts import (
 from hrusha.ledger.tags import CLAIM_TAG, ensure_rule
 
 AERO_DECIMALS = 18
-POOLS_PER_CALL = 300  # RewardsSugar.rewards scans pools; chunked eth_calls
-MAX_POOL_CHUNKS = 12
 REWARD_CONTRACT_VERDICT_KEY = "aero_reward_contract:{address}"
 CLAIM_RULE_PRIORITY = 50  # ahead of the seeded token-based guesses (100)
 
@@ -85,16 +84,15 @@ VE_SUGAR_ABI = [
     }
 ]
 
-# hand-derived from contracts/RewardsSugar.vy (struct Reward + def rewards)
+# hand-derived from contracts/RewardsSugar.vy (struct Reward + def rewardsByAddress)
 REWARDS_SUGAR_ABI = [
     {
-        "name": "rewards",
+        "name": "rewardsByAddress",
         "type": "function",
         "stateMutability": "view",
         "inputs": [
-            {"name": "_limit", "type": "uint256"},
-            {"name": "_offset", "type": "uint256"},
             {"name": "_venft_id", "type": "uint256"},
+            {"name": "_pool", "type": "address"},
         ],
         "outputs": [
             {
@@ -172,11 +170,11 @@ class AerodromeAdapter:
         raw = self._ve_sugar.functions.byAccount(Web3.to_checksum_address(address)).call()
         return [_venft_from_tuple(item) for item in raw]
 
-    def claimables(self, venft_id: int) -> list[Claimable]:
+    def claimables(self, venft_id: int, pools: Iterable[str]) -> list[Claimable]:
         found: list[Claimable] = []
-        for chunk in range(MAX_POOL_CHUNKS):
-            rewards = self._rewards_sugar.functions.rewards(
-                POOLS_PER_CALL, chunk * POOLS_PER_CALL, venft_id
+        for pool in sorted({pool.lower() for pool in pools}):
+            rewards = self._rewards_sugar.functions.rewardsByAddress(
+                venft_id, Web3.to_checksum_address(pool)
             ).call()
             for _venft, lp, amount_raw, token, fee, _bribe in rewards:
                 token = token.lower()
