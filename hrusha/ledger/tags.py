@@ -37,6 +37,12 @@ WITHDRAW_TAG = "withdraw"  # principal coming back out of a position
 PURCHASE_TAG = "venft-purchase"  # paid tokens, received a veNFT: form change
 # (NFT receipts are invisible to the ERC-20 ledger, so these are manual
 # tags for now; NFT-aware ingestion is a semantics-discussion follow-up)
+AERO_TOKEN = "AERO"  # receiving AERO (to lock as veAERO) is the veNFT receipt proxy
+# Capital tokens used to buy AERO/veAERO. Restricted to stables because the
+# signal "out token + AERO-in same tx" also fires on bribe-claim txns where
+# the claimer swaps assorted bribe tokens (T, MET, GHST, ...) out in the
+# same tx AERO bribes arrive — those are yield harvests, not capital.
+INVEST_TOKENS = ("USDC",)
 
 # tags whose events are money changing FORM or PLACE, not being made or
 # spent — reports exclude them from income/spend
@@ -126,6 +132,7 @@ def retag_all(conn: sqlite3.Connection, tracked_addresses: set[str]) -> TagStats
         stats.sources_set += _inherit_gas_source(conn)
         stats.tags_applied += _tag_swaps(conn)
         stats.tags_applied += _tag_reinvests(conn)
+        stats.tags_applied += _tag_aero_purchases(conn)
     stats.epochs_assigned = assign_epochs(conn)
     return stats
 
@@ -318,6 +325,40 @@ def _tag_reinvests(conn: sqlite3.Connection) -> int:
         WHERE out_e.kind = 'transfer_out'
           AND out_e.address = in_e.address
           AND out_e.ts BETWEEN in_e.ts AND in_e.ts + {REINVEST_WINDOW_SECONDS}
+        """  # noqa: S608 — interpolations are module constants, not user input
+    )
+    return cursor.rowcount
+
+
+def _tag_aero_purchases(conn: sqlite3.Connection) -> int:
+    """An outgoing USDC leg in a tx where the same address receives AERO is a
+    veAERO purchase: paid USDC, received AERO to lock. Tag it as a purchase
+    so strategy_summary counts the USDC cost as invested capital (deposited)
+    under aerodrome-voting. The matching AERO-in leg stays a swap (form
+    change) and is skipped, so there is no double count. NFT receipts are
+    invisible to the ERC-20 ledger, so AERO-in is the proxy for veNFT
+    receipt.
+
+    Restricted to stable capital tokens (INVEST_TOKENS): the looser signal
+    "any out + AERO-in same tx" also fires on Aerodrome bribe-claim txns
+    where the claimer swaps assorted bribe tokens (T, MET, GHST, ...) out in
+    the same tx AERO bribes arrive — those are yield harvests, not capital.
+    """
+    invest_tokens = ",".join(f"'{t}'" for t in INVEST_TOKENS)
+    cursor = conn.execute(
+        f"""
+        INSERT OR IGNORE INTO tags (event_id, tag, origin)
+        SELECT out_e.id, '{PURCHASE_TAG}', 'rule'
+        FROM events out_e
+        WHERE out_e.kind = 'transfer_out'
+          AND out_e.token IN ({invest_tokens})
+          AND EXISTS (
+            SELECT 1 FROM events in_e
+            WHERE in_e.tx_hash = out_e.tx_hash
+              AND in_e.address = out_e.address
+              AND in_e.kind = 'transfer_in'
+              AND in_e.token = '{AERO_TOKEN}'
+          )
         """  # noqa: S608 — interpolations are module constants, not user input
     )
     return cursor.rowcount
