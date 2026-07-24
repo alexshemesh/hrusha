@@ -103,6 +103,51 @@ def test_query_rows_json_serializable(conn):
 
 
 # --- CLI ----------------------------------------------------------------------
+# `main()` loads its own config from CONFIG_PATH_ENV_VAR (see test_cli.py), so
+# we reuse the YAML-file + env-var fixture pattern rather than building a Config
+# object that main() would ignore.
+
+
+@pytest.fixture
+def config_file(tmp_path, monkeypatch):
+    from hrusha.config import CONFIG_PATH_ENV_VAR
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "addresses:\n"
+        f'  main: "{MAIN}"\n'
+        f'  cold: "{COLD}"\n'
+        "alchemy:\n"
+        '  api_key: "test-key"\n'
+        f'db_path: "{tmp_path / "ledger.db"}"\n'
+    )
+    monkeypatch.setenv(CONFIG_PATH_ENV_VAR, str(path))
+    # seed the ledger at the same db_path the config points at
+    c = open_ledger(tmp_path / "ledger.db")
+    _seed(c)
+    c.close()
+    return path
+
+
+def test_cli_query_outputs_json(config_file, capsys):
+    from hrusha.cli import main
+
+    rc = main(["query", "--token", "aero", "--limit", "5"])
+    assert rc == 0
+    rows = json.loads(capsys.readouterr().out.strip())
+    assert rows and all(r["token"] == "AERO" for r in rows)
+
+
+def test_cli_query_no_filters(config_file, capsys):
+    from hrusha.cli import main
+
+    rc = main(["query", "--limit", "2"])
+    assert rc == 0
+    rows = json.loads(capsys.readouterr().out.strip())
+    assert len(rows) == 2
+
+
+# --- HTTP GET /query ----------------------------------------------------------
 
 
 @pytest.fixture
@@ -117,27 +162,6 @@ def config(tmp_path):
     _seed(c)
     c.close()
     return cfg
-
-
-def test_cli_query_outputs_json(config, capsys):
-    from hrusha.cli import main
-
-    rc = main(["query", "--token", "aero", "--limit", "5"])
-    assert rc == 0
-    rows = json.loads(capsys.readouterr().out.strip())
-    assert rows and all(r["token"] == "AERO" for r in rows)
-
-
-def test_cli_query_no_filters(config, capsys):
-    from hrusha.cli import main
-
-    rc = main(["query", "--limit", "2"])
-    assert rc == 0
-    rows = json.loads(capsys.readouterr().out.strip())
-    assert len(rows) == 2
-
-
-# --- HTTP GET /query ----------------------------------------------------------
 
 
 @pytest.fixture
