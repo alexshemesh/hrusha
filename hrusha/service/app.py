@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,7 +140,32 @@ def create_app(
 
     `start_scheduler=True` (what `hrusha serve` passes) runs the
     background sync cadence; tests and one-off tooling leave it off."""
-    app = FastAPI(title="hrusha", docs_url=None, redoc_url=None, openapi_url=None)
+    # scheduler is started/stopped via the app lifespan below; keep a
+    # reference so the page() helper can read next_run_ts even when the
+    # scheduler is disabled (tests pass start_scheduler=False).
+    scheduler = None
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        nonlocal scheduler
+        if start_scheduler:
+            from hrusha.service.scheduler import SyncScheduler
+
+            scheduler = SyncScheduler(run_sync_once)
+            scheduler.start()
+        try:
+            yield
+        finally:
+            if scheduler is not None:
+                scheduler.stop()
+
+    app = FastAPI(
+        title="hrusha",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.filters["usd"] = _fmt_usd
     templates.env.filters["amount"] = _fmt_amount
@@ -172,14 +198,6 @@ def create_app(
             sync_state.last_outcome = outcome
             sync_state.last_finished_ts = int(time.time())
         return ok
-
-    scheduler = None
-    if start_scheduler:
-        from hrusha.service.scheduler import SyncScheduler
-
-        scheduler = SyncScheduler(run_sync_once)
-        app.add_event_handler("startup", scheduler.start)
-        app.add_event_handler("shutdown", scheduler.stop)
 
     def page(request: Request, name: str, **context):
         context.update(
