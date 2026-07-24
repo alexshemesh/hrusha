@@ -57,9 +57,12 @@ def test_cursor_advances_past_last_block(tmp_path):
     run_full_sync(config, provider, conn, offline_resolver(conn, provider))
     run_full_sync(config, provider, conn, offline_resolver(conn, provider))
 
-    # first sync starts at 0; second starts one block past the last seen block
-    assert provider.transfer_calls[0] == (MAIN, 0)
-    assert provider.transfer_calls[2] == (MAIN, BLOCK_1 + 1)
+    # first sync starts at 0; second starts one block past the last seen block.
+    # Fetches now run concurrently across addresses (Tier 2), so call order is
+    # nondeterministic — assert membership + count instead of index.
+    assert (MAIN, 0) in provider.transfer_calls
+    assert (MAIN, BLOCK_1 + 1) in provider.transfer_calls
+    assert len(provider.transfer_calls) == 4  # 2 addresses x 2 syncs
     cursor = conn.execute(
         "SELECT value FROM sync_state WHERE key = ?", (f"transfers_cursor:{MAIN}",)
     ).fetchone()
@@ -80,7 +83,7 @@ def test_transfer_source_overrides_provider_for_transfers(tmp_path):
     assert summary.transfers.events_inserted == 1
     assert summary.fees.events_inserted == 1  # receipts still come from `provider`
     assert provider.transfer_calls == []
-    assert source.transfer_calls[0] == (MAIN, 0)
+    assert (MAIN, 0) in source.transfer_calls
     conn.close()
 
 
@@ -97,10 +100,11 @@ def test_nft_transfers_use_their_own_cursor(tmp_path):
     run_full_sync(config, provider, conn, offline_resolver(conn, provider), transfer_source=source)
 
     # the NFT cursor starts at 0 and advances independently of the main one,
-    # so shipping NFT support after the first backfill still fetches history
-    assert source.nft_calls[0] == (MAIN, 0)
-    assert source.nft_calls[2] == (MAIN, BLOCK_1 + 1)
-    assert source.transfer_calls[2] == (MAIN, BLOCK_1 + 51)
+    # so shipping NFT support after the first backfill still fetches history.
+    # Call order is nondeterministic under concurrent fetches — assert membership.
+    assert (MAIN, 0) in source.nft_calls
+    assert (MAIN, BLOCK_1 + 1) in source.nft_calls
+    assert (MAIN, BLOCK_1 + 51) in source.transfer_calls
     assert conn.execute("SELECT COUNT(*) FROM events WHERE token_id IS NOT NULL").fetchone() == (1,)
     conn.close()
 
