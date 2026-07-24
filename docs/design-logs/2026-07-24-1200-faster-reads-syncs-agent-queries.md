@@ -88,8 +88,28 @@ Three tiers, built in order; each tier is independently shippable.
 - Measure before building Tier 2/3: time `hrusha report` and a full sync
   before and after Tier 1.
 
+## Progress
+- **Tier 1 MERGED** (PR #20, commit 4374582). schema v4: WAL+NORMAL PRAGMAs
+  + idx_events_address_ts, idx_events_kind_ts, idx_tags_tag_event.
+- **Tier 2 (B1) in progress.** Refactor run_full_sync's per-address loop
+  into fetch-parallel / ingest-serial phases:
+  - Phase 1 (serial, main thread): read all per-address block cursors.
+  - Phase 2 (ThreadPoolExecutor, max_workers=4 default, capped at
+    len(addresses)): per address, fetch transfers then tx_fees for outgoing
+    hashes. Pure network — no SQLite in worker threads. NFT fetches share
+    the same pool. httpx.Client is thread-safe for concurrent requests.
+  - Phase 3 (serial, main thread): ingest_transfers/ingest_fees + advance
+    each cursor, in address order. Prices still resolved inline during
+    ingest (B3 defers that). Summary counters aggregate as before.
+  - Error semantics: a failed fetch propagates (`.result()` raises) and
+    aborts the run before any ingest, matching serial fail-fast. Next sync
+    re-fetches idempotently.
+  - Thread-safety guard: all sqlite3.Connection access stays on the main
+    thread; workers only touch transfer_source/provider (httpx) and return
+    dataclass results. No check_same_thread needed.
+
 ## Follow-ups
-- B1 parallel sync (Tier 2)
+- B1 parallel sync (Tier 2) — IN PROGRESS
 - C1+C2 query API + pi tool (Tier 3)
 - A2 materialized summaries (deferred, measure-first)
 - B3 decouple pricing from sync (Tier 2)
