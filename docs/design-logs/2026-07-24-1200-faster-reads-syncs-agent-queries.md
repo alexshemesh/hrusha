@@ -1,7 +1,7 @@
 ---
 date: 2026-07-24T12:00
 type: architecture
-status: proposed
+status: tier3-in-progress
 trigger: architecture | api-change | new-pattern
 touches:
   - hrusha/ledger/store.py
@@ -60,8 +60,13 @@ Three tiers, built in order; each tier is independently shippable.
 - C1: structured read-only query API (hrusha query CLI + GET /query)
   with parameterized filters (token, source, kind, address, tag,
   since/until, limit) -> JSON. No raw SQL surface; row-limited.
+  **DONE** — `reports.query_events()`, `hrusha query` subcommand,
+  `GET /query` route; 15 tests in tests/test_query.py.
 - C2: expose as a pi tool/skill so the agent composes filters from
   natural language and queries the ledger directly.
+  **DONE** — `.pi/extensions/hrusha-query.ts` registers a read-only
+  `hrusha_query` tool that shells out to `hrusha query` and returns
+  validated JSON. No secrets through the LLM; CLI reads its own config.
 
 ### Deferred (measure first)
 - A2: materialized summary tables (epoch_summary, daily_pnl) maintained

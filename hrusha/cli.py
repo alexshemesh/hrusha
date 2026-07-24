@@ -5,6 +5,7 @@ Commands (Phases 1-2):
   sync --dry-run  read config, connect to Alchemy, print ETH balances only
   balances        live token balances with USD values (not from the ledger)
   transfers       recent ledger transfers with tags
+  query           read-only ledger query -> JSON (agent-queryable; filters + limit)
   fees            gas spent, total and per period
   report          neto per epoch x source (USD; --coins for native amounts)
   tag             manually tag an event by id (always wins over rules)
@@ -23,6 +24,7 @@ Exit codes: 0 ok, 2 config problem, 3 provider problem, 4 bad reference,
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 import time
@@ -81,6 +83,18 @@ def run_command(args: argparse.Namespace, config: Config) -> int:
         return run_balances(config)
     if args.command == "transfers":
         return run_transfers(config, limit=args.limit)
+    if args.command == "query":
+        return run_query(
+            config,
+            token=args.token,
+            source=args.source,
+            kind=args.kind,
+            address=args.address,
+            tag=args.tag,
+            since=args.since,
+            until=args.until,
+            limit=args.limit,
+        )
     if args.command == "fees":
         return run_fees(config, days=args.days)
     if args.command == "report":
@@ -131,6 +145,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     transfers = subparsers.add_parser("transfers", help="recent transfers from the ledger")
     transfers.add_argument("--limit", type=int, default=25, help="rows to show (default 25)")
+
+    query = subparsers.add_parser(
+        "query", help="read-only ledger query (JSON output; agent-queryable)"
+    )
+    query.add_argument("--token", default=None, help="filter by token symbol/address")
+    query.add_argument("--source", default=None, help="filter by source label")
+    query.add_argument("--kind", default=None, help="filter by event kind (e.g. transfer, fee)")
+    query.add_argument("--address", default=None, help="filter by wallet address")
+    query.add_argument("--tag", default=None, help="filter by tag")
+    query.add_argument(
+        "--since", type=int, default=None, help="unix-seconds lower bound (inclusive)"
+    )
+    query.add_argument(
+        "--until", type=int, default=None, help="unix-seconds upper bound (inclusive)"
+    )
+    query.add_argument("--limit", type=int, default=50, help="rows to return (default 50, max 500)")
 
     fees = subparsers.add_parser("fees", help="gas fees paid, from the ledger")
     fees.add_argument("--days", type=int, default=30, help="look-back window (default 30)")
@@ -291,6 +321,35 @@ def run_transfers(config: Config, limit: int) -> int:
             f"{row.id:>6} {when:<17} {direction:<4} {wallet:<8} {token[:10]:<10} "
             f"{float(row.amount_native):>18,.6f} {usd}  {(row.source or ''):<18} {row.tags}"
         )
+    return EXIT_OK
+
+
+def run_query(
+    config: Config,
+    *,
+    token: str | None,
+    source: str | None,
+    kind: str | None,
+    address: str | None,
+    tag: str | None,
+    since: int | None,
+    until: int | None,
+    limit: int,
+) -> int:
+    """Read-only ledger query -> stdout as JSON (agent-queryable)."""
+    with open_ledger(config.db_path) as conn:
+        rows = reports.query_events(
+            conn,
+            token=token,
+            source=source,
+            kind=kind,
+            address=address,
+            tag=tag,
+            since=since,
+            until=until,
+            limit=limit,
+        )
+    print(json.dumps(rows, default=str))
     return EXIT_OK
 
 
