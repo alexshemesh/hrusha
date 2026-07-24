@@ -80,6 +80,92 @@ def recent_transfers(
     return [TransferRow(*row) for row in rows]
 
 
+# --- Tier 3: agent-queryable ledger -------------------------------------------
+# Parameterized, row-limited read-only query for the CLI `query` subcommand and
+# the GET /query HTTP route. Returns plain dicts (JSON-serializable) so callers
+# never handle SQL types directly. All filters are bind-parametrized; the
+# WHERE clauses are literals, so S608 is a false positive (same pattern as
+# recent_transfers above).
+
+_QUERY_MAX_LIMIT = 500
+
+
+def query_events(
+    conn: sqlite3.Connection,
+    *,
+    token: str | None = None,
+    source: str | None = None,
+    kind: str | None = None,
+    address: str | None = None,
+    tag: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Read-only ledger query, row-limited, JSON-serializable rows.
+
+    Filters are AND-combined. `since`/`until` are unix-seconds bounds
+    (inclusive). `limit` is clamped to [1, _QUERY_MAX_LIMIT]. Lowercased
+    `token`/`source`/`kind`/`tag` match their stored values exactly.
+    """
+    clauses: list[str] = []
+    params: list = []
+    if token is not None:
+        clauses.append("LOWER(e.token) = LOWER(?)")
+        params.append(token)
+    if source is not None:
+        clauses.append("COALESCE(e.source, 'untagged') = ?")
+        params.append(source)
+    if kind is not None:
+        clauses.append("e.kind = ?")
+        params.append(kind)
+    if address is not None:
+        clauses.append("LOWER(e.address) = LOWER(?)")
+        params.append(address)
+    if tag is not None:
+        clauses.append("e.id IN (SELECT event_id FROM tags WHERE tag = ?)")
+        params.append(tag)
+    if since is not None:
+        clauses.append("e.ts >= ?")
+        params.append(since)
+    if until is not None:
+        clauses.append("e.ts <= ?")
+        params.append(until)
+    limit = max(1, min(int(limit), _QUERY_MAX_LIMIT))
+    where = " AND ".join(clauses) if clauses else "1=1"
+    rows = conn.execute(
+        f"""
+        SELECT e.id, e.ts, e.kind, e.token, e.amount_native, e.usd_at_time,
+               e.address, e.counterparty, e.tx_hash, e.source,
+               COALESCE(GROUP_CONCAT(t.tag, ','), ''), e.token_id
+        FROM events e
+        LEFT JOIN tags t ON t.event_id = e.id
+        WHERE {where}
+        GROUP BY e.id
+        ORDER BY e.ts DESC, e.id DESC
+        LIMIT ?
+        """,  # noqa: S608 — where-clause is assembled from literals; values are bound
+        (*params, limit),
+    ).fetchall()
+    return [
+        {
+            "id": row[0],
+            "ts": row[1],
+            "kind": row[2],
+            "token": row[3],
+            "amount_native": row[4],
+            "usd_at_time": row[5],
+            "address": row[6],
+            "counterparty": row[7],
+            "tx_hash": row[8],
+            "source": row[9],
+            "tags": row[10],
+            "token_id": row[11],
+        }
+        for row in rows
+    ]
+
+
 @dataclass(frozen=True)
 class SnapshotRow:
     ts: int

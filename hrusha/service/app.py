@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from hrusha.config import Config
@@ -308,6 +308,35 @@ def create_app(
             tag=tag,
             wallet_labels={address: label for label, address in config.addresses.items()},
         )
+
+    @app.get("/query")
+    def query(
+        token: str | None = None,
+        source: str | None = None,
+        kind: str | None = None,
+        address: str | None = None,
+        tag: str | None = None,
+        since: int | None = None,
+        until: int | None = None,
+        limit: int = 50,
+    ):
+        """Read-only, row-limited ledger query -> JSON (agent-queryable)."""
+        conn = open_ledger(config.db_path)
+        try:
+            rows = reports.query_events(
+                conn,
+                token=token,
+                source=source,
+                kind=kind,
+                address=address,
+                tag=tag,
+                since=since,
+                until=until,
+                limit=limit,
+            )
+        finally:
+            conn.close()
+        return JSONResponse(rows)
 
     @app.post("/tag")
     def tag(request: Request, event_id: int = Form(...), tag: str = Form(...)):
