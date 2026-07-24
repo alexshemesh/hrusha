@@ -100,16 +100,44 @@ SCHEMA_MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE events ADD COLUMN token_id TEXT;
     """,
+    # v4 — read-side covering indexes (Tier 1 perf). Additive, idempotent;
+    # CREATE INDEX IF NOT EXISTS so re-runs and existing DBs are safe.
+    #   idx_events_address_ts  — per-address time-range drill-down + future
+    #     query API (C1); the existing idx_events_address lacks ts ordering.
+    #   idx_events_kind_ts     — fee_summary (kind='gas_fee' AND ts>=?) and
+    #     kind-filtered report scans; idx_events_ts alone cannot seek on kind.
+    #   idx_tags_tag_event     — the NOT IN (SELECT ... WHERE tag IN (...))
+    #     subquery in neto/coins_by_epoch_source; the UNIQUE(event_id, tag)
+    #     index leads with event_id, so tag-filtered lookups scanned.
+    """
+    CREATE INDEX IF NOT EXISTS idx_events_address_ts ON events (address, ts);
+    CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events (kind, ts);
+    CREATE INDEX IF NOT EXISTS idx_tags_tag_event ON tags (tag, event_id);
+    """,
 )
 
 SCHEMA_VERSION = len(SCHEMA_MIGRATIONS)
 
 
 def open_ledger(db_path: Path) -> sqlite3.Connection:
-    """Open (creating if needed) the ledger DB, migrated to the latest schema."""
+    """Open (creating if needed) the ledger DB, migrated to the latest schema.
+
+    Connection-wide PRAGMAs tune SQLite for this workload: a single-writer
+    app that reads a lot. WAL lets readers run concurrently with the
+    background sync writer; NORMAL (vs FULL) only risks the last transaction
+    on a power cut, which is acceptable for derived state rebuildable from
+    chain. mmap + cache_size keep the working set in memory.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # journal_mode is persistent (stored in the DB file header); set once.
+    conn.execute("PRAGMA journal_mode = WAL")
+    # The rest are per-connection and must be set every time.
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA mmap_size = 268435456")  # 256 MiB
+    conn.execute("PRAGMA cache_size = -65536")  # 64 MiB page cache
     apply_migrations(conn)
     return conn
 
