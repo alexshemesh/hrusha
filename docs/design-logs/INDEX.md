@@ -1,5 +1,6 @@
 # Design Log Index
 
+- 2026-07-24-1200 — `faster-reads-syncs-agent-queries` — SQLite PRAGMAs+indexes (Tier 1), parallel sync (Tier 2), agent query API+pi tool (Tier 3) (status: proposed)
 - 2026-07-09-1220 — `vote-discoverability` — exclude migrating pools and distinguish carried-forward votes (status: proposed)
 - 2026-07-08-1830 — `pool-quality-filters` — outlier/dead-pool/tiny-TVL hard filters, reward-only/apy-declining/apy-volatile tags, rank by 30d avg APY (status: implemented)
 - 2026-07-08-1715 — `invest-dashboard-and-morpho-fix` — invest suggestions on the web dashboard + Morpho vault symbol fix (status: merged)
