@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import statistics
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import httpx
@@ -53,6 +54,7 @@ WEI = 10**18
 POOL_INDEXES_PER_CALL = 200  # on-chain MAX_EPOCHS=200 caps returned rows
 TOP_CANDIDATES = 100  # pools that get the expensive per-pool deep look
 HISTORY_EPOCHS = 6  # completed epochs used to project final votes
+MAX_SCAN_WORKERS = 4  # parallel RPC workers for paging + per-candidate deep look
 PRICE_BATCH = 50  # DefiLlama coins per request (URL length bound)
 HTTP_TIMEOUT_SECONDS = 30.0
 
@@ -428,8 +430,107 @@ def _factory_pages(factories: list[tuple[str, int]], page_size: int = POOL_INDEX
         global_offset += pool_count
 
 
+def _fetch_page(rewards_sugar, limit: int, offset: int):
+    """Fetch one epochsLatest page — pure RPC, thread-safe (independent request)."""
+    return rewards_sugar.functions.epochsLatest(limit, offset).call()
+
+
+def _describe_token(w3, token_meta: dict, web3_cls, address: str) -> tuple[str, int]:
+    """symbol + decimals for an ERC-20, cached in token_meta (idempotent writes)."""
+    if address not in token_meta:
+        try:
+            erc20 = w3.eth.contract(address=web3_cls.to_checksum_address(address), abi=ERC20_ABI)
+            token_meta[address] = (
+                erc20.functions.symbol().call(),
+                erc20.functions.decimals().call(),
+            )
+        except Exception:  # noqa: BLE001
+            token_meta[address] = (address[:10], 18)
+    return token_meta[address]
+
+
+def _scan_candidate(
+    p: dict,
+    w3,
+    web3_cls,
+    rewards_sugar,
+    http: httpx.Client,
+    prices: dict,
+    token_meta: dict,
+    epoch_start: int,
+    now: int,
+    aero_price: float,
+    token_decimals: dict,
+) -> tuple[RawPool, tuple[str, str] | None]:
+    """Deep-look one candidate pool: token0/token1, TVL, vote history.
+
+    Pure RPC/HTTP — no SQLite. Shared caches (prices, token_meta) are mutated
+    via idempotent atomic dict ops under the GIL; duplicate RPCs on a cache
+    miss race are harmless (same result). Returns (RawPool, pair_tokens|None).
+    """
+    lp = web3_cls.to_checksum_address(p["lp"])
+    pool = w3.eth.contract(address=lp, abi=POOL_ABI)
+    try:
+        token0, token1 = pool.functions.token0().call(), pool.functions.token1().call()
+    except Exception:  # noqa: BLE001 — not a standard pool; keep it, visibly unpriced
+        return RawPool(
+            lp=p["lp"],
+            name=p["lp"][:10],
+            symbols=(),
+            votes=p["votes"],
+            fees_usd=p["fees_usd"],
+            incentives_usd=p["incentives_usd"],
+            blind_share=p["blind_share"],
+            tvl_usd=0.0,
+            migrating=p["migrating"],
+        ), None
+    pair = (token0.lower(), token1.lower())
+    needed = {token0.lower(), token1.lower()} - set(prices)
+    if needed:
+        prices.update(_fetch_prices(http, needed))  # GIL-atomic; idempotent
+    tvl = 0.0
+    symbols = []
+    for token in (token0, token1):
+        symbol, decimals = _describe_token(w3, token_meta, web3_cls, token.lower())
+        symbols.append(symbol)
+        erc20 = w3.eth.contract(address=web3_cls.to_checksum_address(token), abi=ERC20_ABI)
+        balance = erc20.functions.balanceOf(lp).call() / 10**decimals
+        tvl += balance * prices.get(token.lower(), (0.0, 0.0))[0]
+    history = rewards_sugar.functions.epochsByAddress(HISTORY_EPOCHS + 1, 0, lp).call()
+    completed = [row for row in history if row[0] < epoch_start][:HISTORY_EPOCHS]
+    incentive_usd_total, self_bribe_usd = 0.0, 0.0
+    for token, amount in p["bribes"]:
+        token = token.lower()  # noqa: PLW2901
+        usd = amount / 10 ** token_decimals.get(token, 18) * prices.get(token, (0.0, 0.0))[0]
+        incentive_usd_total += usd
+        if token in pair:
+            symbol = _describe_token(w3, token_meta, web3_cls, token)[0]
+            if symbol not in MAJOR_SYMBOLS:
+                self_bribe_usd += usd  # bribing voters with the pool's own exotic token
+    return RawPool(
+        lp=p["lp"],
+        name=f"{_pool_kind(pool)}-{'/'.join(symbols)}",
+        symbols=tuple(symbols),
+        votes=p["votes"],
+        fees_usd=p["fees_usd"],
+        incentives_usd=p["incentives_usd"],
+        blind_share=p["blind_share"],
+        tvl_usd=tvl,
+        final_votes=tuple(votes / WEI for _ts, _lp, votes, _em, _bribes, _fees in completed),
+        emissions_usd=p["emissions_rate"] * (now - epoch_start) * aero_price,
+        incentive_epochs=sum(1 for row in completed if row[4]),  # row[4] = bribes
+        self_bribe_share=(self_bribe_usd / incentive_usd_total if incentive_usd_total else 0.0),
+        migrating=p["migrating"],
+    ), pair
+
+
 def scan(config: Config) -> ScoutResult:
-    """Full scan of every alive gauge on Base. ~3 minutes; never call inline."""
+    """Full scan of every alive gauge on Base; never call inline.
+
+    Parallelized via ThreadPoolExecutor (MAX_SCAN_WORKERS): parallel
+    epochsLatest paging + parallel per-candidate deep look. Fail-fast —
+    a failed fetch propagates via .result() before results are consumed.
+    """
     from web3 import Web3  # deferred: read-only dashboard pages never need web3
 
     w3 = Web3(Web3.HTTPProvider(f"https://base-mainnet.g.alchemy.com/v2/{config.alchemy_api_key}"))
@@ -455,8 +556,14 @@ def scan(config: Config) -> ScoutResult:
 
     pools: list[dict] = []
     seen: set[str] = set()  # defensive: window semantics must never yield a pool twice
-    for factory, limit, offset in _factory_pages(factory_lengths):
-        rows = rewards_sugar.functions.epochsLatest(limit, offset).call()
+    pages = list(_factory_pages(factory_lengths))
+    with ThreadPoolExecutor(max_workers=MAX_SCAN_WORKERS) as ex:
+        page_futs = [
+            ex.submit(_fetch_page, rewards_sugar, limit, offset)
+            for _factory, limit, offset in pages
+        ]
+        page_rows = [f.result() for f in page_futs]  # fail-fast; parallel I/O
+    for (factory, _limit, _offset), rows in zip(pages, page_rows, strict=True):
         for ts, lp, votes, emissions, bribes, fees in rows:
             if ts != epoch_start:  # decode sanity: running epoch must be Thursday-anchored
                 raise RuntimeError(f"LpEpoch decode looks wrong: ts={ts} != {epoch_start}")
@@ -484,17 +591,7 @@ def scan(config: Config) -> ScoutResult:
     token_meta: dict[str, tuple[str, int]] = {}  # address -> (symbol, decimals)
 
     def describe(address: str) -> tuple[str, int]:
-        address = address.lower()
-        if address not in token_meta:
-            erc20 = w3.eth.contract(address=Web3.to_checksum_address(address), abi=ERC20_ABI)
-            try:
-                token_meta[address] = (
-                    erc20.functions.symbol().call(),
-                    erc20.functions.decimals().call(),
-                )
-            except Exception:  # noqa: BLE001 — spam/odd tokens: show the address instead
-                token_meta[address] = (address[:10], 18)
-        return token_meta[address]
+        return _describe_token(w3, token_meta, Web3, address.lower())
 
     token_decimals = {
         token.lower(): describe(token)[1]
@@ -513,67 +610,29 @@ def scan(config: Config) -> ScoutResult:
 
     raws: list[RawPool] = []
     pair_tokens: dict[str, tuple[str, str]] = {}  # lp -> (token0, token1) lowercased
-    for p in candidates:
-        lp = Web3.to_checksum_address(p["lp"])
-        pool = w3.eth.contract(address=lp, abi=POOL_ABI)
-        try:
-            token0, token1 = pool.functions.token0().call(), pool.functions.token1().call()
-        except Exception:  # noqa: BLE001 — not a standard pool; keep it, visibly unpriced
-            raws.append(
-                RawPool(
-                    lp=p["lp"],
-                    name=p["lp"][:10],
-                    symbols=(),
-                    votes=p["votes"],
-                    fees_usd=p["fees_usd"],
-                    incentives_usd=p["incentives_usd"],
-                    blind_share=p["blind_share"],
-                    tvl_usd=0.0,
-                    migrating=p["migrating"],
-                )
+    with ThreadPoolExecutor(max_workers=MAX_SCAN_WORKERS) as ex:
+        cand_futs = [
+            ex.submit(
+                _scan_candidate,
+                p,
+                w3,
+                Web3,
+                rewards_sugar,
+                http,
+                prices,
+                token_meta,
+                epoch_start,
+                now,
+                aero_price,
+                token_decimals,
             )
-            continue
-        prices.update(_fetch_prices(http, {token0.lower(), token1.lower()} - set(prices)))
-        pair_tokens[p["lp"]] = (token0.lower(), token1.lower())
-        tvl = 0.0
-        symbols = []
-        for token in (token0, token1):
-            symbol, decimals = describe(token)
-            symbols.append(symbol)
-            erc20 = w3.eth.contract(address=Web3.to_checksum_address(token), abi=ERC20_ABI)
-            balance = erc20.functions.balanceOf(lp).call() / 10**decimals
-            tvl += balance * prices.get(token.lower(), (0.0, 0.0))[0]
-        history = rewards_sugar.functions.epochsByAddress(HISTORY_EPOCHS + 1, 0, lp).call()
-        completed = [row for row in history if row[0] < epoch_start][:HISTORY_EPOCHS]
-        pair = pair_tokens[p["lp"]]
-        incentive_usd_total, self_bribe_usd = 0.0, 0.0
-        for token, amount in p["bribes"]:
-            token = token.lower()  # noqa: PLW2901
-            usd = amount / 10 ** token_decimals.get(token, 18) * prices.get(token, (0.0, 0.0))[0]
-            incentive_usd_total += usd
-            if token in pair and describe(token)[0] not in MAJOR_SYMBOLS:
-                self_bribe_usd += usd  # bribing voters with the pool's own exotic token
-        raws.append(
-            RawPool(
-                lp=p["lp"],
-                name=f"{_pool_kind(pool)}-{'/'.join(symbols)}",
-                symbols=tuple(symbols),
-                votes=p["votes"],
-                fees_usd=p["fees_usd"],
-                incentives_usd=p["incentives_usd"],
-                blind_share=p["blind_share"],
-                tvl_usd=tvl,
-                final_votes=tuple(
-                    votes / WEI for _ts, _lp, votes, _em, _bribes, _fees in completed
-                ),
-                emissions_usd=p["emissions_rate"] * (now - epoch_start) * aero_price,
-                incentive_epochs=sum(1 for row in completed if row[4]),  # row[4] = bribes
-                self_bribe_share=(
-                    self_bribe_usd / incentive_usd_total if incentive_usd_total else 0.0
-                ),
-                migrating=p["migrating"],
-            )
-        )
+            for p in candidates
+        ]
+        for i, fut in enumerate(cand_futs):
+            raw, pair = fut.result()  # fail-fast; parallel RPC across candidates
+            raws.append(raw)
+            if pair:
+                pair_tokens[candidates[i]["lp"]] = pair
 
     # token age (days since DefiLlama's first price) for the YOUNG-TOKEN gate
     first_seen = _fetch_first_seen(http, {t for pair in pair_tokens.values() for t in pair})
