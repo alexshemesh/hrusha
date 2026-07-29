@@ -8,6 +8,7 @@ from hrusha.ledger import reports
 from hrusha.ledger.tags import (
     REINVEST_WINDOW_SECONDS,
     SECONDS_PER_WEEK,
+    SPAM_TAG,
     add_rule,
     assign_epochs,
     epoch_id_for,
@@ -320,3 +321,63 @@ def test_router_vault_deposit_pairs_the_asset_leg(ledger):
     assert by_kind["transfer_out"][0] == "morpho"  # the money leg found its strategy
     assert "deposit" in by_kind["transfer_out"][1]
     assert by_kind["transfer_in"][0] == "morpho"
+
+
+# --- spam-token filter --------------------------------------------------------
+
+
+def test_unpriced_never_priced_token_is_tagged_spam(ledger):
+    """An unpriced transfer of a token with zero priced events -> spam."""
+    eid = insert_event(ledger, token="SCAM", amount_native="1000", usd_at_time=None)
+    retag_all(ledger, tracked_addresses={MAIN})
+    assert SPAM_TAG in event_tags(ledger, eid)
+
+
+def test_unpriced_token_that_is_sometime_priced_is_not_spam(ledger):
+    """An unpriced event of a token that has a priced event elsewhere -> not spam."""
+    priced_id = insert_event(ledger, token="BRIBE", amount_native="5", usd_at_time=2.5)
+    unpriced_id = insert_event(
+        ledger, token="BRIBE", amount_native="1", usd_at_time=None, log_index=1
+    )
+    retag_all(ledger, tracked_addresses={MAIN})
+    assert SPAM_TAG not in event_tags(ledger, unpriced_id)
+    assert SPAM_TAG not in event_tags(ledger, priced_id)
+
+
+def test_priced_event_is_never_tagged_spam(ledger):
+    eid = insert_event(ledger, token="USDC", amount_native="100", usd_at_time=100.0)
+    retag_all(ledger, tracked_addresses={MAIN})
+    assert SPAM_TAG not in event_tags(ledger, eid)
+
+
+def test_nft_transfer_not_tagged_spam(ledger):
+    """NFT transfers (token_id set) are excluded from spam detection."""
+    eid = insert_event(
+        ledger,
+        token="NFT",
+        amount_native="1",
+        usd_at_time=None,
+        token_id=123,
+    )
+    retag_all(ledger, tracked_addresses={MAIN})
+    assert SPAM_TAG not in event_tags(ledger, eid)
+
+
+def test_spam_tag_clears_when_token_later_gets_priced(ledger):
+    """Self-correcting: once the token has a priced event, retag drops spam."""
+    spam_id = insert_event(ledger, token="LATE", amount_native="10", usd_at_time=None)
+    retag_all(ledger, tracked_addresses={MAIN})
+    assert SPAM_TAG in event_tags(ledger, spam_id)
+    # later sync prices a LATE event
+    insert_event(ledger, token="LATE", amount_native="5", usd_at_time=1.0, log_index=1)
+    retag_all(ledger, tracked_addresses={MAIN})
+    assert SPAM_TAG not in event_tags(ledger, spam_id)
+
+
+def test_spam_excluded_from_report_unpriced_count(ledger):
+    """Spam-tagged events must not inflate the report's unpriced column."""
+    insert_event(ledger, token="SCAM", amount_native="1000", usd_at_time=None)
+    retag_all(ledger, tracked_addresses={MAIN})
+    rows = reports.neto_by_epoch_source(ledger, since_ts=0)
+    # the SCAM event is tagged spam (NON_FLOW) -> not counted anywhere
+    assert sum(r.unpriced_count for r in rows) == 0
