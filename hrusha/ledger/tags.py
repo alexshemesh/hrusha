@@ -35,6 +35,7 @@ UNLOCK_TAG = "unlock"  # tokens coming back out of a lock: not income
 DEPOSIT_TAG = "deposit"  # into a yield position (vault shares etc.)
 WITHDRAW_TAG = "withdraw"  # principal coming back out of a position
 PURCHASE_TAG = "venft-purchase"  # paid tokens, received a veNFT: form change
+SPAM_TAG = "spam"  # unpriceable airdrop/dust token never priced anywhere — not real income
 # (NFT receipts are invisible to the ERC-20 ledger, so these are manual
 # tags for now; NFT-aware ingestion is a semantics-discussion follow-up)
 AERO_TOKEN = "AERO"  # receiving AERO (to lock as veAERO) is the veNFT receipt proxy
@@ -44,8 +45,9 @@ AERO_TOKEN = "AERO"  # receiving AERO (to lock as veAERO) is the veNFT receipt p
 # same tx AERO bribes arrive — those are yield harvests, not capital.
 INVEST_TOKENS = ("USDC",)
 
-# tags whose events are money changing FORM or PLACE, not being made or
-# spent — reports exclude them from income/spend
+# tags whose events are money changing FORM or PLACE, or are not real
+# income/expense (spam) — reports exclude them from income/spend and from
+# the unpriced count
 NON_FLOW_TAGS = (
     OWN_TRANSFER_TAG,
     SWAP_TAG,
@@ -54,6 +56,7 @@ NON_FLOW_TAGS = (
     DEPOSIT_TAG,
     WITHDRAW_TAG,
     PURCHASE_TAG,
+    SPAM_TAG,
 )
 REINVEST_WINDOW_SECONDS = 12 * 3600  # a swap this soon after a claim is a reinvest
 
@@ -133,6 +136,7 @@ def retag_all(conn: sqlite3.Connection, tracked_addresses: set[str]) -> TagStats
         stats.tags_applied += _tag_swaps(conn)
         stats.tags_applied += _tag_reinvests(conn)
         stats.tags_applied += _tag_aero_purchases(conn)
+        stats.tags_applied += _tag_spam(conn)
     stats.epochs_assigned = assign_epochs(conn)
     return stats
 
@@ -360,5 +364,35 @@ def _tag_aero_purchases(conn: sqlite3.Connection) -> int:
               AND in_e.token = '{AERO_TOKEN}'
           )
         """  # noqa: S608 — interpolations are module constants, not user input
+    )
+    return cursor.rowcount
+
+
+def _tag_spam(conn: sqlite3.Connection) -> int:
+    """Tag unpriceable airdrop/dust transfer events as `spam`.
+
+    Rule: an unpriced transfer (usd_at_time IS NULL, fungible) is spam if its
+    token has NO priced transfer event anywhere in the ledger — i.e. no price
+    source has ever valued it. Legit tokens (AERO, USDC, bribes) always have at
+    least one priced event, so they are never misclassified; tokens that get
+    priced later move out of "never priced" and the rule tag clears on the next
+    retag (rule-origin tags are deleted and re-derived every run).
+    """
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO tags (event_id, tag, origin)
+        SELECT e.id, 'spam', 'rule'
+        FROM events e
+        WHERE e.usd_at_time IS NULL
+          AND e.token_id IS NULL
+          AND e.kind IN ('transfer_in', 'transfer_out')
+          AND NOT EXISTS (
+            SELECT 1 FROM events priced
+            WHERE priced.token = e.token
+              AND priced.usd_at_time IS NOT NULL
+              AND priced.kind IN ('transfer_in', 'transfer_out')
+              AND priced.token_id IS NULL
+          )
+        """
     )
     return cursor.rowcount
