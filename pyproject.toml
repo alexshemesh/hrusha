@@ -63,3 +63,6 @@ select = [
     "S105",  # token == "USDC" is a crypto symbol comparison, not a password
     "S106",  # token= kwarg is a crypto symbol, not a password
 ]
+"hrusha/ledger/tags.py" = [
+    "S105",  # AERO_TOKEN = "AERO" is a crypto symbol, not a password
+]
