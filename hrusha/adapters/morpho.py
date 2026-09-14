@@ -98,13 +98,26 @@ class MorphoAdapter:
         return [_position_from_item(item) for item in items]
 
 
+def fetch_positions(adapter: MorphoAdapter, addresses: list[str]) -> dict[str, list]:
+    """address -> positions, fetched once so a sync pays one GraphQL call
+    per wallet instead of one for rule discovery and another for snapshots."""
+    return {address: adapter.positions(address) for address in addresses}
+
+
 def discover_vault_rules(
-    conn: sqlite3.Connection, adapter: MorphoAdapter, addresses: list[str]
+    conn: sqlite3.Connection,
+    adapter: MorphoAdapter,
+    addresses: list[str],
+    positions: dict[str, list] | None = None,
 ) -> int:
-    """Seed deposit/withdraw rules for every vault the wallets ever used."""
+    """Seed deposit/withdraw rules for every vault the wallets ever used.
+
+    `positions` lets a caller that already fetched them (a sync) pass them
+    in; without it the rules are discovered from a fresh fetch.
+    """
     rules_added = 0
     for address in addresses:
-        for position in adapter.positions(address):
+        for position in positions[address] if positions is not None else adapter.positions(address):
             # ERC-4626 twice over: the share legs (contract = vault) AND the
             # asset legs (counterparty = vault) — the asset legs carry the
             # money, so without them a strategy report sees $0 deposited

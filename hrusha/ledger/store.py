@@ -114,6 +114,48 @@ SCHEMA_MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events (kind, ts);
     CREATE INDEX IF NOT EXISTS idx_tags_tag_event ON tags (tag, event_id);
     """,
+    # v5 — persistent caches of immutable chain facts. Sync and the vote scout
+    # re-fetched these every run because every cache was a per-process dict and
+    # adapters/scan runs are constructed fresh by design. Cached facts are
+    # immutable by construction (ERC-20 symbol/decimals, a pool's tokens and
+    # kind, a completed epoch's final votes); GoPlus verdicts get a TTL instead.
+    # Derived state like the rest of the ledger — dropping these only costs a
+    # re-warm. Accessed via ledger/chain_cache.py; see
+    # docs/design-logs/2026-07-09-1317-sync-caching-and-claimables-fix.md
+    """
+    CREATE TABLE token_meta (
+        token    TEXT PRIMARY KEY,                  -- lowercase contract address
+        symbol   TEXT NOT NULL,
+        decimals INTEGER NOT NULL
+    );
+
+    CREATE TABLE pool_meta (
+        pool             TEXT PRIMARY KEY,          -- lowercase pool (lp) address
+        token0           TEXT NOT NULL,
+        token1           TEXT NOT NULL,
+        kind             TEXT NOT NULL,             -- 'CL100' | 'sAMM' | 'vAMM' | '?'
+        epochs_synced_ts INTEGER NOT NULL DEFAULT 0 -- epoch start history is complete through
+    );
+
+    CREATE TABLE pool_epochs (
+        pool       TEXT    NOT NULL,
+        epoch_ts   INTEGER NOT NULL,                -- epoch start (completed epochs only)
+        votes      REAL    NOT NULL,                -- final votes, veAERO units (analytical)
+        had_bribes INTEGER NOT NULL,
+        PRIMARY KEY (pool, epoch_ts)
+    );
+
+    CREATE TABLE token_checks (
+        token      TEXT    PRIMARY KEY,             -- GoPlus verdicts; TTL enforced in code
+        checked_ts INTEGER NOT NULL,
+        risks      TEXT    NOT NULL                 -- JSON array of risk strings, [] = clean
+    );
+
+    CREATE TABLE token_first_seen (
+        token    TEXT    PRIMARY KEY,               -- DefiLlama first-price ts; hits only
+        first_ts INTEGER NOT NULL
+    );
+    """,
 )
 
 SCHEMA_VERSION = len(SCHEMA_MIGRATIONS)
@@ -138,6 +180,10 @@ def open_ledger(db_path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA temp_store = MEMORY")
     conn.execute("PRAGMA mmap_size = 268435456")  # 256 MiB
     conn.execute("PRAGMA cache_size = -65536")  # 64 MiB page cache
+    # WAL keeps readers off the writer's back, but two writers still collide:
+    # the vote scout (background thread, own connection) writes chain-fact
+    # caches while a sync may be writing the ledger. Wait, don't fail.
+    conn.execute("PRAGMA busy_timeout = 5000")
     apply_migrations(conn)
     return conn
 

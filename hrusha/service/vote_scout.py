@@ -23,8 +23,10 @@ tier) — callers run it on a background thread, never inline.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import statistics
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -38,6 +40,8 @@ from hrusha.adapters.known_contracts import (
     VE_SUGAR,
 )
 from hrusha.config import Config, ScoutFilters
+from hrusha.ledger.chain_cache import ChainCache, PoolMeta
+from hrusha.ledger.store import open_ledger
 
 log = logging.getLogger("hrusha.vote_scout")
 
@@ -449,6 +453,18 @@ def _describe_token(w3, token_meta: dict, web3_cls, address: str) -> tuple[str, 
     return token_meta[address]
 
 
+@dataclass(frozen=True)
+class _FreshFacts:
+    """Chain facts a candidate actually fetched, for the caller to persist.
+
+    Workers never touch SQLite (one connection, one thread), so what they
+    learn comes back here and the caller writes it after the fan-out joins.
+    """
+
+    pool_meta: tuple[str, str, str] | None = None  # (token0, token1, kind)
+    epochs: tuple[tuple[int, float, bool], ...] | None = None  # completed, newest first
+
+
 def _scan_candidate(
     p: dict,
     w3,
@@ -461,29 +477,41 @@ def _scan_candidate(
     now: int,
     aero_price: float,
     token_decimals: dict,
-) -> tuple[RawPool, tuple[str, str] | None]:
+    pool_meta: PoolMeta | None = None,
+    cached_epochs: list[tuple[int, float, bool]] | None = None,
+) -> tuple[RawPool, tuple[str, str] | None, _FreshFacts]:
     """Deep-look one candidate pool: token0/token1, TVL, vote history.
 
     Pure RPC/HTTP — no SQLite. Shared caches (prices, token_meta) are mutated
     via idempotent atomic dict ops under the GIL; duplicate RPCs on a cache
-    miss race are harmless (same result). Returns (RawPool, pair_tokens|None).
+    miss race are harmless (same result). `pool_meta` and `cached_epochs` are
+    plain values read from the ledger by the CALLER before fan-out (a sqlite3
+    connection belongs to one thread), and stay None when uncached.
+    Returns (RawPool, pair_tokens|None).
     """
     lp = web3_cls.to_checksum_address(p["lp"])
     pool = w3.eth.contract(address=lp, abi=POOL_ABI)
-    try:
-        token0, token1 = pool.functions.token0().call(), pool.functions.token1().call()
-    except Exception:  # noqa: BLE001 — not a standard pool; keep it, visibly unpriced
-        return RawPool(
-            lp=p["lp"],
-            name=p["lp"][:10],
-            symbols=(),
-            votes=p["votes"],
-            fees_usd=p["fees_usd"],
-            incentives_usd=p["incentives_usd"],
-            blind_share=p["blind_share"],
-            tvl_usd=0.0,
-            migrating=p["migrating"],
-        ), None
+    if pool_meta is not None:
+        token0, token1 = pool_meta.token0, pool_meta.token1
+    else:
+        try:
+            token0, token1 = pool.functions.token0().call(), pool.functions.token1().call()
+        except Exception:  # noqa: BLE001 — not a standard pool; keep it, visibly unpriced
+            return (
+                RawPool(
+                    lp=p["lp"],
+                    name=p["lp"][:10],
+                    symbols=(),
+                    votes=p["votes"],
+                    fees_usd=p["fees_usd"],
+                    incentives_usd=p["incentives_usd"],
+                    blind_share=p["blind_share"],
+                    tvl_usd=0.0,
+                    migrating=p["migrating"],
+                ),
+                None,
+                _FreshFacts(),
+            )
     pair = (token0.lower(), token1.lower())
     needed = {token0.lower(), token1.lower()} - set(prices)
     if needed:
@@ -496,8 +524,17 @@ def _scan_candidate(
         erc20 = w3.eth.contract(address=web3_cls.to_checksum_address(token), abi=ERC20_ABI)
         balance = erc20.functions.balanceOf(lp).call() / 10**decimals
         tvl += balance * prices.get(token.lower(), (0.0, 0.0))[0]
-    history = rewards_sugar.functions.epochsByAddress(HISTORY_EPOCHS + 1, 0, lp).call()
-    completed = [row for row in history if row[0] < epoch_start][:HISTORY_EPOCHS]
+    if cached_epochs is not None:
+        completed, fresh_epochs = cached_epochs[:HISTORY_EPOCHS], None
+    else:
+        history = rewards_sugar.functions.epochsByAddress(HISTORY_EPOCHS + 1, 0, lp).call()
+        # normalize to the cache's shape: (epoch_ts, final votes, had bribes)
+        fresh_epochs = tuple(
+            (int(ts), votes / WEI, bool(bribes))
+            for ts, _lp, votes, _em, bribes, _fees in history
+            if ts < epoch_start  # completed epochs only — the running one still moves
+        )
+        completed = list(fresh_epochs[:HISTORY_EPOCHS])
     incentive_usd_total, self_bribe_usd = 0.0, 0.0
     for token, amount in p["bribes"]:
         token = token.lower()  # noqa: PLW2901
@@ -507,21 +544,29 @@ def _scan_candidate(
             symbol = _describe_token(w3, token_meta, web3_cls, token)[0]
             if symbol not in MAJOR_SYMBOLS:
                 self_bribe_usd += usd  # bribing voters with the pool's own exotic token
-    return RawPool(
-        lp=p["lp"],
-        name=f"{_pool_kind(pool)}-{'/'.join(symbols)}",
-        symbols=tuple(symbols),
-        votes=p["votes"],
-        fees_usd=p["fees_usd"],
-        incentives_usd=p["incentives_usd"],
-        blind_share=p["blind_share"],
-        tvl_usd=tvl,
-        final_votes=tuple(votes / WEI for _ts, _lp, votes, _em, _bribes, _fees in completed),
-        emissions_usd=p["emissions_rate"] * (now - epoch_start) * aero_price,
-        incentive_epochs=sum(1 for row in completed if row[4]),  # row[4] = bribes
-        self_bribe_share=(self_bribe_usd / incentive_usd_total if incentive_usd_total else 0.0),
-        migrating=p["migrating"],
-    ), pair
+    kind = pool_meta.kind if pool_meta is not None else _pool_kind(pool)
+    return (
+        RawPool(
+            lp=p["lp"],
+            name=f"{kind}-{'/'.join(symbols)}",
+            symbols=tuple(symbols),
+            votes=p["votes"],
+            fees_usd=p["fees_usd"],
+            incentives_usd=p["incentives_usd"],
+            blind_share=p["blind_share"],
+            tvl_usd=tvl,
+            final_votes=tuple(votes for _ts, votes, _had_bribes in completed),
+            emissions_usd=p["emissions_rate"] * (now - epoch_start) * aero_price,
+            incentive_epochs=sum(1 for _ts, _votes, had_bribes in completed if had_bribes),
+            self_bribe_share=(self_bribe_usd / incentive_usd_total if incentive_usd_total else 0.0),
+            migrating=p["migrating"],
+        ),
+        pair,
+        _FreshFacts(
+            pool_meta=None if pool_meta is not None else (token0.lower(), token1.lower(), kind),
+            epochs=fresh_epochs,
+        ),
+    )
 
 
 def scan(config: Config) -> ScoutResult:
@@ -530,7 +575,36 @@ def scan(config: Config) -> ScoutResult:
     Parallelized via ThreadPoolExecutor (MAX_SCAN_WORKERS): parallel
     epochsLatest paging + parallel per-candidate deep look. Fail-fast —
     a failed fetch propagates via .result() before results are consumed.
+
+    Immutable chain facts come from (and go back to) the ledger's cache
+    tables; the cache is an optimization, so a ledger that won't open
+    degrades to the previous full-fetch behaviour instead of failing.
     """
+    conn = _open_cache_conn(config)
+    try:
+        return _scan(config, ChainCache(conn) if conn is not None else None)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _open_cache_conn(config: Config) -> sqlite3.Connection | None:
+    """The ledger connection backing the chain-fact caches, or None.
+
+    The scout runs on a background thread in the dashboard; a locked or
+    unreadable ledger must cost speed, never the scan.
+    """
+    try:
+        return open_ledger(config.db_path)
+    except Exception as exc:  # noqa: BLE001 — the cache is optional by design
+        log.warning(
+            "vote scout running without chain-fact cache", extra={"why": type(exc).__name__}
+        )
+        return None
+
+
+def _scan(config: Config, cache: ChainCache | None) -> ScoutResult:
+    """The scan proper, against an optional fact cache (None = fetch it all)."""
     from web3 import Web3  # deferred: read-only dashboard pages never need web3
 
     w3 = Web3(Web3.HTTPProvider(f"https://base-mainnet.g.alchemy.com/v2/{config.alchemy_api_key}"))
@@ -588,7 +662,12 @@ def scan(config: Config) -> ScoutResult:
     prices = _fetch_prices(http, reward_tokens)
     aero_price = prices.get(AERO_CONTRACT, (0.0, 0.0))[0]
 
-    token_meta: dict[str, tuple[str, int]] = {}  # address -> (symbol, decimals)
+    # Warm the in-memory caches from the ledger, then hand plain dicts to the
+    # workers: symbol/decimals and a pool's tokens never change, so a scan
+    # that re-derives them from chain is paying for nothing. Reads happen
+    # here, on one thread — sqlite3 objects never cross into the pool.
+    token_meta: dict[str, tuple[str, int]] = cache.token_meta_all() if cache else {}
+    warmed_tokens = set(token_meta)
 
     def describe(address: str) -> tuple[str, int]:
         return _describe_token(w3, token_meta, Web3, address.lower())
@@ -608,34 +687,57 @@ def scan(config: Config) -> ScoutResult:
     pools.sort(key=lambda p: -((p["fees_usd"] + p["incentives_usd"]) / max(p["votes"], 1)))
     candidates = [p for p in pools if p["fees_usd"] + p["incentives_usd"] > 0][:TOP_CANDIDATES]
 
+    # A pool's history is immutable once its epochs close, but only through
+    # the epoch the cache was last filled to: a marker older than the last
+    # completed epoch means a week (or more) of history is missing.
+    pool_facts = cache.pool_meta_many(p["lp"] for p in candidates) if cache else {}
+    history_fresh_from = epoch_start - SECONDS_PER_WEEK
+
     raws: list[RawPool] = []
     pair_tokens: dict[str, tuple[str, str]] = {}  # lp -> (token0, token1) lowercased
+    fresh_by_lp: dict[str, _FreshFacts] = {}
     with ThreadPoolExecutor(max_workers=MAX_SCAN_WORKERS) as ex:
-        cand_futs = [
-            ex.submit(
-                _scan_candidate,
-                p,
-                w3,
-                Web3,
-                rewards_sugar,
-                http,
-                prices,
-                token_meta,
-                epoch_start,
-                now,
-                aero_price,
-                token_decimals,
+        cand_futs = []
+        for p in candidates:
+            meta = pool_facts.get(p["lp"].lower())
+            epochs = (
+                cache.pool_epochs(p["lp"])
+                if cache and meta is not None and meta.epochs_synced_ts >= history_fresh_from
+                else None
             )
-            for p in candidates
-        ]
+            cand_futs.append(
+                ex.submit(
+                    _scan_candidate,
+                    p,
+                    w3,
+                    Web3,
+                    rewards_sugar,
+                    http,
+                    prices,
+                    token_meta,
+                    epoch_start,
+                    now,
+                    aero_price,
+                    token_decimals,
+                    meta,
+                    epochs,
+                )
+            )
         for i, fut in enumerate(cand_futs):
-            raw, pair = fut.result()  # fail-fast; parallel RPC across candidates
+            raw, pair, fresh = fut.result()  # fail-fast; parallel RPC across candidates
             raws.append(raw)
+            fresh_by_lp[candidates[i]["lp"]] = fresh
             if pair:
                 pair_tokens[candidates[i]["lp"]] = pair
 
+    _persist_pool_facts(cache, fresh_by_lp, epoch_start)
+    if cache is not None:
+        cache.store_token_meta_many(
+            {token: meta for token, meta in token_meta.items() if token not in warmed_tokens}
+        )
+
     # token age (days since DefiLlama's first price) for the YOUNG-TOKEN gate
-    first_seen = _fetch_first_seen(http, {t for pair in pair_tokens.values() for t in pair})
+    first_seen = _fetch_first_seen(http, {t for pair in pair_tokens.values() for t in pair}, cache)
     for raw in raws:
         pair = pair_tokens.get(raw.lp)
         if pair and all(t in first_seen for t in pair):
@@ -646,7 +748,9 @@ def scan(config: Config) -> ScoutResult:
         bribe_tokens = {t.lower() for p in candidates for t, _ in p["bribes"]}
         checked = {t for t in {*bribe_tokens, *(t for pr in pair_tokens.values() for t in pr)}
                    if token_meta.get(t, ("?",))[0] not in MAJOR_SYMBOLS}  # fmt: skip
-        risks, token_safety_checked = _fetch_token_risks(http, sorted(checked), token_meta)
+        risks, token_safety_checked = _fetch_token_risks(
+            http, sorted(checked), token_meta, cache, now
+        )
         for p, raw in zip(candidates, raws, strict=False):
             exposed = {*pair_tokens.get(raw.lp, ()), *(t.lower() for t, _ in p["bribes"])}
             raw.token_risks = tuple(
@@ -668,18 +772,51 @@ def scan(config: Config) -> ScoutResult:
     )
 
 
+def _persist_pool_facts(
+    cache: ChainCache | None, fresh_by_lp: dict[str, _FreshFacts], epoch_start: int
+) -> None:
+    """Write back what the workers learned. Metadata first: store_pool_epochs
+    updates a pool_meta row, so the row has to exist before the marker does."""
+    if cache is None:
+        return
+    for lp, fresh in fresh_by_lp.items():
+        if fresh.pool_meta is not None:
+            cache.store_pool_meta(lp, *fresh.pool_meta)
+        if fresh.epochs is not None:
+            # marker = the running epoch's start: every epoch that has
+            # closed is now recorded, and next week's scan refetches
+            cache.store_pool_epochs(lp, fresh.epochs, epoch_start)
+
+
 def _fetch_token_risks(
-    http: httpx.Client, tokens: list[str], token_meta: dict
+    http: httpx.Client,
+    tokens: list[str],
+    token_meta: dict,
+    cache: ChainCache | None = None,
+    now: int | None = None,
 ) -> tuple[dict[str, tuple[str, ...]], bool]:
     """token -> GoPlus hard-risk strings; bool = the check actually ran.
 
     One token per call — GoPlus's batch endpoint silently drops results
     (docs/examples/goplus_probe.py). Positive findings only: a token
     GoPlus has never scanned is unknown, and unknown is not a risk flag
-    (age/TVL/pricing gates carry that weight)."""
+    (age/TVL/pricing gates carry that weight).
+
+    Verdicts cache with a TTL (they are slow-changing, not immutable), and
+    clean results cache too — otherwise the no-risk majority, which is most
+    tokens, is refetched forever.
+    """
+    now = int(time.time()) if now is None else now
     risks: dict[str, tuple[str, ...]] = {}
     failures = 0
+    fetched: list[str] = []
     for token in tokens:
+        cached = cache.token_risks(token, now) if cache is not None else None
+        if cached is not None:
+            if cached:
+                risks[token] = _with_symbol(token, cached, token_meta)
+            continue
+        fetched.append(token)
         try:
             response = http.get(GOPLUS_URL, params={"contract_addresses": token})
             response.raise_for_status()
@@ -687,20 +824,31 @@ def _fetch_token_risks(
         except (httpx.HTTPError, ValueError):
             failures += 1
             continue
-        if not data:
-            continue
-        found = [field_name for field_name in GOPLUS_HARD_RISKS if data.get(field_name) == "1"]
-        for side in ("buy_tax", "sell_tax"):
-            raw_tax = data.get(side)
-            if raw_tax not in (None, "") and float(raw_tax) > GOPLUS_MAX_TAX:
-                found.append(f"{side}={float(raw_tax):.0%}")
+        # An unknown token (GoPlus never scanned it) caches as clean-with-TTL:
+        # it is not a risk flag today, and re-asking every scan costs a call
+        # per token to learn the same nothing.
+        found = []
+        if data:
+            found = [field_name for field_name in GOPLUS_HARD_RISKS if data.get(field_name) == "1"]
+            for side in ("buy_tax", "sell_tax"):
+                raw_tax = data.get(side)
+                if raw_tax not in (None, "") and float(raw_tax) > GOPLUS_MAX_TAX:
+                    found.append(f"{side}={float(raw_tax):.0%}")
+        if cache is not None:
+            cache.store_token_risks(token, found, now)
         if found:
-            symbol = token_meta.get(token, (token[:10],))[0]
-            risks[token] = tuple(f"{symbol}:{risk}" for risk in found)
+            risks[token] = _with_symbol(token, found, token_meta)
     if failures:
-        log.warning("GoPlus token check failures", extra={"failed": failures, "of": len(tokens)})
-    all_failed = bool(tokens) and failures == len(tokens)
+        log.warning("GoPlus token check failures", extra={"failed": failures, "of": len(fetched)})
+    all_failed = bool(fetched) and failures == len(fetched)
     return risks, not all_failed
+
+
+def _with_symbol(token: str, risks: Iterable[str], token_meta: dict) -> tuple[str, ...]:
+    """Label risks with the token's symbol; the cache stores them raw so a
+    later scan can re-label once the symbol is actually known."""
+    symbol = token_meta.get(token, (token[:10],))[0]
+    return tuple(f"{symbol}:{risk}" for risk in risks)
 
 
 def _fetch_prices(http: httpx.Client, tokens: set[str]) -> dict[str, tuple[float, float]]:
@@ -719,18 +867,28 @@ def _fetch_prices(http: httpx.Client, tokens: set[str]) -> dict[str, tuple[float
     return prices
 
 
-def _fetch_first_seen(http: httpx.Client, tokens: set[str]) -> dict[str, int]:
-    """token -> unix ts of DefiLlama's FIRST recorded price (token age proxy)."""
-    first: dict[str, int] = {}
-    todo = sorted(tokens)
+def _fetch_first_seen(
+    http: httpx.Client, tokens: set[str], cache: ChainCache | None = None
+) -> dict[str, int]:
+    """token -> unix ts of DefiLlama's FIRST recorded price (token age proxy).
+
+    Hits are immutable and cached; misses are not. A token DefiLlama cannot
+    price today may gain a price later, and caching that absence would pin
+    the pool's age gate to "unknown" forever.
+    """
+    first: dict[str, int] = cache.first_seen(tokens) if cache is not None else {}
+    todo = sorted(tokens - set(first))
+    found: dict[str, int] = {}
     for start in range(0, len(todo), PRICE_BATCH):
         coins = ",".join(f"base:{t}" for t in todo[start : start + PRICE_BATCH])
         response = http.get(DEFILLAMA_FIRST_URL.format(coins=coins))
         response.raise_for_status()
         for coin, data in (response.json().get("coins") or {}).items():
             if data.get("timestamp"):
-                first[coin.split(":", 1)[1].lower()] = int(data["timestamp"])
-    return first
+                found[coin.split(":", 1)[1].lower()] = int(data["timestamp"])
+    if cache is not None:
+        cache.store_first_seen(found)
+    return first | found
 
 
 def _reward_usd(legs, prices, token_decimals) -> tuple[float, float]:

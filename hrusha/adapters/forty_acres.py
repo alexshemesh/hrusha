@@ -26,6 +26,7 @@ from decimal import Decimal
 from web3 import Web3
 
 from hrusha.adapters.known_contracts import FORTY_ACRES_VAULT
+from hrusha.ledger.chain_cache import ChainCache
 
 log = logging.getLogger("hrusha.adapters.forty_acres")
 
@@ -82,14 +83,29 @@ class FortyAcresPosition:
 class FortyAcresAdapter:
     """Read-only ERC-4626 views over the 40acres supply vault."""
 
-    def __init__(self, w3: Web3, vault: str = FORTY_ACRES_VAULT) -> None:
+    def __init__(
+        self,
+        w3: Web3,
+        vault: str = FORTY_ACRES_VAULT,
+        cache: ChainCache | None = None,
+    ) -> None:
         self._vault_address = vault.lower()
         self._vault = w3.eth.contract(address=Web3.to_checksum_address(vault), abi=ERC4626_ABI)
-        asset_address = self._vault.functions.asset().call()
-        asset = w3.eth.contract(address=asset_address, abi=ERC20_META_ABI)
-        self._asset_contract = asset_address.lower()
-        self._asset_symbol = asset.functions.symbol().call()
-        self._asset_decimals = asset.functions.decimals().call()
+        # A vault's asset and that asset's symbol/decimals are fixed for the
+        # life of the contract, but adapters are constructed per sync run, so
+        # without a cache these three eth_calls are paid on every run. The
+        # cache stays optional: tests and probes construct this without a DB.
+        self._asset_contract = cache.erc4626_asset(self._vault_address) if cache else None
+        meta = cache.token_meta(self._asset_contract) if cache and self._asset_contract else None
+        if self._asset_contract is None or meta is None:
+            asset_address = self._vault.functions.asset().call()
+            asset = w3.eth.contract(address=asset_address, abi=ERC20_META_ABI)
+            self._asset_contract = asset_address.lower()
+            meta = (asset.functions.symbol().call(), asset.functions.decimals().call())
+            if cache is not None:
+                cache.store_erc4626_asset(self._vault_address, self._asset_contract)
+                cache.store_token_meta(self._asset_contract, *meta)
+        self._asset_symbol, self._asset_decimals = meta
 
     def position(self, address: str) -> FortyAcresPosition | None:
         """Current redeemable position of `address`, or None when empty."""

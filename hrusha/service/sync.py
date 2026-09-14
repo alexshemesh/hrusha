@@ -27,7 +27,7 @@ from hrusha.adapters.known_contracts import (
     SOURCE_MORPHO,
     seed_default_rules,
 )
-from hrusha.adapters.morpho import MorphoAdapter, discover_vault_rules
+from hrusha.adapters.morpho import MorphoAdapter, discover_vault_rules, fetch_positions
 from hrusha.config import Config
 from hrusha.ledger.ingest import IngestStats, ingest_fees, ingest_transfers
 from hrusha.ledger.tags import retag_all
@@ -134,8 +134,13 @@ def run_full_sync(
             "aerodrome claim rules discovered",
             extra={"sync_run_id": summary.sync_run_id, "rules_added": rules_added},
         )
+    morpho_positions = None
     if morpho is not None:
-        vault_rules = discover_vault_rules(conn, morpho, list(config.addresses.values()))
+        # one GraphQL call per wallet, shared by rule discovery and snapshots
+        morpho_positions = fetch_positions(morpho, list(config.addresses.values()))
+        vault_rules = discover_vault_rules(
+            conn, morpho, list(config.addresses.values()), morpho_positions
+        )
         log.info(
             "morpho vault rules discovered",
             extra={"sync_run_id": summary.sync_run_id, "rules_added": vault_rules},
@@ -155,7 +160,7 @@ def run_full_sync(
     if aerodrome is not None:
         summary.aerodrome_snapshots = _snapshot_aerodrome(conn, aerodrome, config, prices)
     if morpho is not None:
-        summary.morpho_snapshots = _snapshot_morpho(conn, morpho, config)
+        summary.morpho_snapshots = _snapshot_morpho(conn, config, morpho_positions)
     if forty_acres is not None:
         summary.forty_acres_snapshots = _snapshot_forty_acres(conn, forty_acres, config, prices)
     log.info(
@@ -345,13 +350,16 @@ def _aerodrome_claimable_pools(conn, aerodrome, nft) -> tuple[str, ...]:
     return ordered
 
 
-def _snapshot_morpho(conn: sqlite3.Connection, morpho: MorphoAdapter, config: Config) -> int:
-    """Write active Morpho vault positions (USD valued by Morpho itself)."""
+def _snapshot_morpho(conn: sqlite3.Connection, config: Config, positions: dict[str, list]) -> int:
+    """Write active Morpho vault positions (USD valued by Morpho itself).
+
+    Positions are fetched once by the caller and shared with rule discovery.
+    """
     now = int(time.time())
     count = 0
     with conn:
         for address in config.addresses.values():
-            for position in morpho.positions(address):
+            for position in positions.get(address, []):
                 if position.assets == 0:
                     continue  # emptied vault: rules still matter, snapshots don't
                 conn.execute(
