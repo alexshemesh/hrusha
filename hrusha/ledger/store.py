@@ -156,6 +156,19 @@ SCHEMA_MIGRATIONS: tuple[str, ...] = (
         first_ts INTEGER NOT NULL
     );
     """,
+    # v6 — snapshots carry the sync run that wrote them. One sync writes its
+    # snapshot groups (balances, aerodrome, morpho, 40acres) seconds apart,
+    # each with its own now(), so "the latest snapshots" used to mean "every
+    # row within 600s of the newest" — which silently merged two syncs that
+    # landed inside that window and double-counted every position. The run id
+    # says exactly which rows belong together. Existing rows get their ts as
+    # a synthetic run id, which keeps each historical group distinct without
+    # inventing an accuracy we do not have.
+    """
+    ALTER TABLE snapshots ADD COLUMN sync_run_id TEXT;
+    UPDATE snapshots SET sync_run_id = 'pre-v6-' || ts WHERE sync_run_id IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_snapshots_run ON snapshots (sync_run_id);
+    """,
 )
 
 SCHEMA_VERSION = len(SCHEMA_MIGRATIONS)

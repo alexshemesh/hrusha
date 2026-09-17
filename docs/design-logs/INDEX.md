@@ -1,5 +1,7 @@
 # Design Log Index
 
+- 2026-09-14-1520 — `one-sync-at-a-time` — cross-process sync lock in the ledger + schema v6 snapshots.sync_run_id (fixes positions counted once per overlapping sync) (status: implemented)
+
 - 2026-07-24-1200 — `faster-reads-syncs-agent-queries` — SQLite PRAGMAs+indexes (Tier 1), parallel sync (Tier 2), agent query API+pi tool (Tier 3) (status: proposed)
 - 2026-07-09-1317 — `sync-caching-and-claimables-fix` — schema v5 persistent caches of immutable chain facts (token/pool/epoch/GoPlus/first-seen), Morpho fetched once per sync (status: implemented)
 - 2026-07-09-1220 — `vote-discoverability` — exclude migrating pools and distinguish carried-forward votes (status: proposed)

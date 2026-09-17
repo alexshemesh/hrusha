@@ -38,7 +38,7 @@ def test_v5_applies_to_a_v4_ledger_without_touching_its_data(tmp_path):
     conn.close()
 
     migrated = open_ledger(db_path)
-    assert schema_version(migrated) == SCHEMA_VERSION == 5
+    assert schema_version(migrated) == SCHEMA_VERSION
     assert migrated.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 1
     for table in ("token_meta", "pool_meta", "pool_epochs", "token_checks", "token_first_seen"):
         migrated.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608 — fixed names

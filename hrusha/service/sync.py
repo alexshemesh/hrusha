@@ -30,6 +30,7 @@ from hrusha.adapters.known_contracts import (
 from hrusha.adapters.morpho import MorphoAdapter, discover_vault_rules, fetch_positions
 from hrusha.config import Config
 from hrusha.ledger.ingest import IngestStats, ingest_fees, ingest_transfers
+from hrusha.ledger.sync_lock import sync_lock
 from hrusha.ledger.tags import retag_all
 from hrusha.prices import PriceResolver
 from hrusha.providers.interface import DataProvider, TransferSource
@@ -80,12 +81,43 @@ def run_full_sync(
     aerodrome: AerodromeAdapter | None = None,
     morpho: MorphoAdapter | None = None,
     forty_acres: FortyAcresAdapter | None = None,
+    who: str = "cli",
 ) -> SyncSummary:
     """Sync the ledger. Transfers come from `transfer_source` (defaults to
     `provider`); balances, receipts and prices always come from `provider`;
     the optional Aerodrome adapter contributes claim rules and position/
-    claimable snapshots."""
+    claimable snapshots.
+
+    Raises `SyncBusy` when another sync — in this process or another one —
+    already holds the lock. Guarding here rather than at each call site
+    means every caller is covered, including ones not written yet.
+    """
     summary = SyncSummary(sync_run_id=uuid.uuid4().hex[:12])
+    with sync_lock(config.db_path, who, summary.sync_run_id):
+        return _run_full_sync(
+            config,
+            provider,
+            conn,
+            prices,
+            summary,
+            transfer_source,
+            aerodrome,
+            morpho,
+            forty_acres,
+        )
+
+
+def _run_full_sync(
+    config: Config,
+    provider: DataProvider,
+    conn: sqlite3.Connection,
+    prices: PriceResolver,
+    summary: SyncSummary,
+    transfer_source: TransferSource | None,
+    aerodrome: AerodromeAdapter | None,
+    morpho: MorphoAdapter | None,
+    forty_acres: FortyAcresAdapter | None,
+) -> SyncSummary:
     transfer_source = transfer_source or provider
     tracked = set(config.addresses.values())
     has_nft = hasattr(transfer_source, "nft_transfers")
@@ -156,13 +188,16 @@ def run_full_sync(
             "epochs_assigned": tag_stats.epochs_assigned,
         },
     )
-    summary.balance_snapshots = _snapshot_balances(conn, provider, config)
+    run_id = summary.sync_run_id
+    summary.balance_snapshots = _snapshot_balances(conn, provider, config, run_id)
     if aerodrome is not None:
-        summary.aerodrome_snapshots = _snapshot_aerodrome(conn, aerodrome, config, prices)
+        summary.aerodrome_snapshots = _snapshot_aerodrome(conn, aerodrome, config, prices, run_id)
     if morpho is not None:
-        summary.morpho_snapshots = _snapshot_morpho(conn, config, morpho_positions)
+        summary.morpho_snapshots = _snapshot_morpho(conn, config, morpho_positions, run_id)
     if forty_acres is not None:
-        summary.forty_acres_snapshots = _snapshot_forty_acres(conn, forty_acres, config, prices)
+        summary.forty_acres_snapshots = _snapshot_forty_acres(
+            conn, forty_acres, config, prices, run_id
+        )
     log.info(
         "sync finished",
         extra={
@@ -240,7 +275,9 @@ def _ingest_address(
         )
 
 
-def _snapshot_balances(conn: sqlite3.Connection, provider: DataProvider, config: Config) -> int:
+def _snapshot_balances(
+    conn: sqlite3.Connection, provider: DataProvider, config: Config, run_id: str
+) -> int:
     now = int(time.time())
     balances = provider.balances(config.addresses)
     with conn:
@@ -248,8 +285,8 @@ def _snapshot_balances(conn: sqlite3.Connection, provider: DataProvider, config:
             conn.execute(
                 """
                 INSERT INTO snapshots (ts, chain, address, kind, token, amount_native,
-                                       usd_at_time)
-                VALUES (?, ?, ?, 'balance', ?, ?, ?)
+                                       usd_at_time, sync_run_id)
+                VALUES (?, ?, ?, 'balance', ?, ?, ?, ?)
                 """,
                 (
                     now,
@@ -258,6 +295,7 @@ def _snapshot_balances(conn: sqlite3.Connection, provider: DataProvider, config:
                     b.token,
                     str(b.amount),
                     float(b.usd_value) if b.usd_value is not None else None,
+                    run_id,
                 ),
             )
     return len(balances)
@@ -268,6 +306,7 @@ def _snapshot_aerodrome(
     aerodrome: AerodromeAdapter,
     config: Config,
     prices: PriceResolver,
+    run_id: str,
 ) -> int:
     """Write veNFT lock positions and pending claimables as snapshots."""
     now = int(time.time())
@@ -279,8 +318,8 @@ def _snapshot_aerodrome(
                 conn.execute(
                     """
                     INSERT INTO snapshots (ts, chain, address, kind, token, source,
-                                           amount_native, usd_at_time)
-                    VALUES (?, ?, ?, 'position', 'AERO', ?, ?, ?)
+                                           amount_native, usd_at_time, sync_run_id)
+                    VALUES (?, ?, ?, 'position', 'AERO', ?, ?, ?, ?)
                     """,
                     (
                         now,
@@ -289,6 +328,7 @@ def _snapshot_aerodrome(
                         SOURCE_AERODROME,
                         str(nft.locked_aero),
                         float(nft.locked_aero * aero_price) if aero_price is not None else None,
+                        run_id,
                     ),
                 )
                 count += 1
@@ -298,8 +338,8 @@ def _snapshot_aerodrome(
                     conn.execute(
                         """
                         INSERT INTO snapshots (ts, chain, address, kind, token, source,
-                                               amount_native, usd_at_time)
-                        VALUES (?, ?, ?, 'claimable', 'AERO', ?, ?, ?)
+                                               amount_native, usd_at_time, sync_run_id)
+                        VALUES (?, ?, ?, 'claimable', 'AERO', ?, ?, ?, ?)
                         """,
                         (
                             now,
@@ -308,6 +348,7 @@ def _snapshot_aerodrome(
                             SOURCE_AERODROME_REBASE,
                             str(nft.rebase_aero),
                             float(nft.rebase_aero * aero_price) if aero_price is not None else None,
+                            run_id,
                         ),
                     )
                     count += 1
@@ -317,8 +358,8 @@ def _snapshot_aerodrome(
                     conn.execute(
                         """
                         INSERT INTO snapshots (ts, chain, address, kind, token, source,
-                                               amount_native, usd_at_time)
-                        VALUES (?, ?, ?, 'claimable', ?, ?, ?, ?)
+                                               amount_native, usd_at_time, sync_run_id)
+                        VALUES (?, ?, ?, 'claimable', ?, ?, ?, ?, ?)
                         """,
                         (
                             now,
@@ -328,6 +369,7 @@ def _snapshot_aerodrome(
                             SOURCE_AERODROME,
                             str(claimable.amount),
                             float(claimable.amount * price) if price is not None else None,
+                            run_id,
                         ),
                     )
                     count += 1
@@ -350,7 +392,9 @@ def _aerodrome_claimable_pools(conn, aerodrome, nft) -> tuple[str, ...]:
     return ordered
 
 
-def _snapshot_morpho(conn: sqlite3.Connection, config: Config, positions: dict[str, list]) -> int:
+def _snapshot_morpho(
+    conn: sqlite3.Connection, config: Config, positions: dict[str, list], run_id: str
+) -> int:
     """Write active Morpho vault positions (USD valued by Morpho itself).
 
     Positions are fetched once by the caller and shared with rule discovery.
@@ -365,8 +409,8 @@ def _snapshot_morpho(conn: sqlite3.Connection, config: Config, positions: dict[s
                 conn.execute(
                     """
                     INSERT INTO snapshots (ts, chain, address, kind, token, source,
-                                           amount_native, usd_at_time)
-                    VALUES (?, ?, ?, 'position', ?, ?, ?, ?)
+                                           amount_native, usd_at_time, sync_run_id)
+                    VALUES (?, ?, ?, 'position', ?, ?, ?, ?, ?)
                     """,
                     (
                         now,
@@ -376,6 +420,7 @@ def _snapshot_morpho(conn: sqlite3.Connection, config: Config, positions: dict[s
                         SOURCE_MORPHO,
                         str(position.assets),
                         position.assets_usd,
+                        run_id,
                     ),
                 )
                 count += 1
@@ -387,6 +432,7 @@ def _snapshot_forty_acres(
     forty_acres: FortyAcresAdapter,
     config: Config,
     prices: PriceResolver,
+    run_id: str,
 ) -> int:
     """Write active 40acres supply positions (USDC redeemable value)."""
     now = int(time.time())
@@ -400,8 +446,8 @@ def _snapshot_forty_acres(
             conn.execute(
                 """
                 INSERT INTO snapshots (ts, chain, address, kind, token, source,
-                                       amount_native, usd_at_time)
-                VALUES (?, ?, ?, 'position', ?, ?, ?, ?)
+                                       amount_native, usd_at_time, sync_run_id)
+                VALUES (?, ?, ?, 'position', ?, ?, ?, ?, ?)
                 """,
                 (
                     now,
@@ -411,6 +457,7 @@ def _snapshot_forty_acres(
                     SOURCE_40ACRES,
                     str(position.assets),
                     float(position.assets * price) if price is not None else None,
+                    run_id,
                 ),
             )
             count += 1

@@ -34,6 +34,7 @@ from hrusha.config import Config
 from hrusha.ledger import reports
 from hrusha.ledger import tags as tags_module
 from hrusha.ledger.store import open_ledger
+from hrusha.ledger.sync_lock import SyncBusy, current_holder
 from hrusha.ledger.tags import SECONDS_PER_WEEK
 from hrusha.providers.alchemy_rpc import AlchemyProvider
 
@@ -102,6 +103,7 @@ def default_sync_runner(config: Config) -> str:
             aerodrome=make_aerodrome_adapter(config),
             morpho=MorphoAdapter(),
             forty_acres=make_forty_acres_adapter(config),
+            who="dashboard",
         )
     finally:
         conn.close()
@@ -189,6 +191,11 @@ def create_app(
         ok = True
         try:
             outcome = run_sync(config)
+        except SyncBusy as exc:
+            # another process (a CLI sync, another instance) got there first.
+            # Not an outage: the work is being done, just not by us.
+            log.info("sync skipped; lock held elsewhere", extra={"holder": exc.holder.describe()})
+            outcome = f"sync skipped — already running: {exc.holder.describe()}"
         except Exception as exc:
             log.error("sync failed", exc_info=exc)
             outcome = f"sync failed: {exc.__class__.__name__} (see logs)"
@@ -200,8 +207,13 @@ def create_app(
         return ok
 
     def page(request: Request, name: str, **context):
+        # The button must reflect ANY running sync, not just ours: a
+        # `hrusha sync` in a terminal writes to the same ledger, and a
+        # refresh clicked on top of it used to be silently swallowed.
+        holder = current_holder(config.db_path)
         context.update(
-            sync_running=sync_state.running,
+            sync_running=sync_state.running or holder is not None,
+            sync_by=holder.describe() if holder is not None else "",
             sync_outcome=sync_state.last_outcome,
             auto_sync_at=scheduler.next_run_ts if scheduler else None,
         )

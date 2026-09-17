@@ -18,7 +18,7 @@ Commands (Phases 1-2):
   serve           local web dashboard (binds 127.0.0.1 — no auth, keep it local)
 
 Exit codes: 0 ok, 2 config problem, 3 provider problem, 4 bad reference,
-5 doctor found discrepancies.
+5 doctor found discrepancies, 6 another sync is already running.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from hrusha.config import Config, ConfigError, load_config
 from hrusha.ledger import reports, rules_io
 from hrusha.ledger import tags as tags_module
 from hrusha.ledger.store import open_ledger
+from hrusha.ledger.sync_lock import SyncBusy
 from hrusha.logs import setup_logging
 from hrusha.prices import PriceResolver
 from hrusha.providers.alchemy_rpc import AlchemyProvider, ProviderError, fetch_eth_balances
@@ -52,6 +53,7 @@ EXIT_CONFIG_ERROR = 2
 EXIT_PROVIDER_ERROR = 3
 EXIT_NOT_FOUND = 4
 EXIT_RECONCILE_MISMATCH = 5
+EXIT_SYNC_BUSY = 6  # another sync holds the lock; nothing was changed
 
 SECONDS_PER_DAY = 86400
 
@@ -69,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CONFIG_ERROR
     try:
         return run_command(args, config)
+    except SyncBusy as exc:
+        # not an error in the user's work — someone else is already doing it
+        print(f"a sync is already running: {exc.holder.describe()}", file=sys.stderr)
+        print("nothing was changed; wait for it to finish, or stop it.", file=sys.stderr)
+        return EXIT_SYNC_BUSY
     except ProviderError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_PROVIDER_ERROR
@@ -250,6 +257,7 @@ def run_sync(config: Config) -> int:
             aerodrome=make_aerodrome_adapter(config),
             morpho=MorphoAdapter(),
             forty_acres=make_forty_acres_adapter(config),
+            who="cli",
         )
     finally:
         conn.close()

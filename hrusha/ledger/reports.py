@@ -177,7 +177,8 @@ class SnapshotRow:
     usd_at_time: float | None
 
 
-SNAPSHOT_SYNC_WINDOW_SECONDS = 600  # one sync writes its snapshot groups seconds apart
+# snapshots are grouped by snapshots.sync_run_id (schema v6); the old
+# 600-second write window could not tell two nearby syncs apart
 
 # grouping policy for the strategy view (display-level, never stored):
 # rebases are anti-dilution income of the voting strategy, and veNFT
@@ -371,17 +372,26 @@ def _latest_cached_price(conn: sqlite3.Connection, keys: tuple[str | None, ...])
 
 
 def latest_snapshots(conn: sqlite3.Connection) -> list[SnapshotRow]:
-    """Snapshots from the most recent sync (all rows within its write window)."""
-    newest = conn.execute("SELECT MAX(ts) FROM snapshots").fetchone()[0]
+    """Snapshots from the most recent sync — exactly one run's rows.
+
+    A sync writes its groups (balances, aerodrome, morpho, 40acres)
+    seconds apart, each stamped with the run id, so the newest row's run
+    identifies the whole set. This used to be a 600-second window, which
+    merged two syncs that happened to land inside it and counted every
+    position once per sync.
+    """
+    newest = conn.execute(
+        "SELECT sync_run_id FROM snapshots ORDER BY ts DESC, id DESC LIMIT 1"
+    ).fetchone()
     if newest is None:
         return []
     rows = conn.execute(
         """
         SELECT ts, address, kind, token, source, amount_native, usd_at_time
-        FROM snapshots WHERE ts > ?
+        FROM snapshots WHERE sync_run_id IS ?
         ORDER BY kind, usd_at_time DESC
         """,
-        (newest - SNAPSHOT_SYNC_WINDOW_SECONDS,),
+        (newest[0],),
     ).fetchall()
     return [SnapshotRow(*row) for row in rows]
 
