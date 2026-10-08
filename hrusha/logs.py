@@ -18,6 +18,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +34,28 @@ _RECORD_BUILTIN_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None)
     "taskName",
 }
 
+# Alchemy carries the API key in the URL PATH, so any library that logs a
+# request URL leaks it. Quieting the loggers we know about is a blocklist the
+# next dependency walks straight past (web3/urllib3 did exactly that), so the
+# formatter redacts as well: nothing reaches a handler unmasked.
+REDACTED = "***"
+_ALCHEMY_PATHS = r"v2|data/v1|prices/v1"
+_PATTERNS = (
+    # full URL, as web3/httpx log it: https://base-mainnet.g.alchemy.com/v2/KEY
+    re.compile(rf"(alchemy\.com/(?:{_ALCHEMY_PATHS})/)[^/\s\"']+"),
+    # urllib3 logs host and path apart: ...alchemy.com:443 "POST /v2/KEY HTTP/1.1"
+    # so the host is not in the same match — key on the path alone. The length
+    # floor keeps real path words ("tokens", "historical") out of the net.
+    re.compile(rf"(/(?:{_ALCHEMY_PATHS})/)[A-Za-z0-9_-]{{12,}}"),
+)
+
+
+def redact(text: str) -> str:
+    """Mask secrets that appear inside otherwise-loggable strings."""
+    for pattern in _PATTERNS:
+        text = pattern.sub(rf"\1{REDACTED}", text)
+    return text
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -40,14 +63,14 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact(record.getMessage()),
         }
         for field, value in record.__dict__.items():
             if field not in _RECORD_BUILTIN_FIELDS:
-                line[field] = value
+                line[field] = redact(value) if isinstance(value, str) else value
         if record.exc_info and record.exc_info[0]:
             line["exception"] = record.exc_info[0].__name__
-        return json.dumps(line, default=str)
+        return redact(json.dumps(line, default=str))
 
 
 def setup_logging(level: int = logging.INFO) -> None:
@@ -68,7 +91,9 @@ def setup_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers[:] = handlers
     root.setLevel(level)
-    # httpx/httpcore log full request URLs at INFO/DEBUG — Alchemy URLs
-    # embed the API key, so those loggers stay at WARNING unconditionally
-    for noisy in ("httpx", "httpcore"):
+    # These log full request URLs at INFO/DEBUG — Alchemy URLs embed the API
+    # key in the path, so they stay at WARNING unconditionally. httpx/httpcore
+    # cover the providers; web3 talks through requests/urllib3, so `-v` used to
+    # write the key to the log file hundreds of times per sync.
+    for noisy in ("httpx", "httpcore", "web3", "urllib3", "requests"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
